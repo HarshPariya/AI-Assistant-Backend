@@ -125,15 +125,13 @@ async def ask_question(req: ChatRequest):
         "content": f"Context from the document:\n{context}\n\nQuestion: {req.message}"
     })
     
-    from utils.llm import get_groq_client
-    client = get_groq_client()
-    response = client.chat.completions.create(
-        model=get_model(),
+    from utils.llm import chat_completion
+    answer = chat_completion(
         messages=messages,
+        model=get_model(),
         temperature=0.3,
-        max_tokens=1500,
+        max_tokens=1024,
     )
-    answer = response.choices[0].message.content
     
     # Update session history
     if req.session_id not in chat_sessions:

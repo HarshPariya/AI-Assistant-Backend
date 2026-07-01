@@ -6,7 +6,7 @@ import json
 import base64
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel
-from utils.llm import get_groq_client, get_model, get_vision_model
+from utils.llm import get_groq_client, get_model, get_vision_model, chat_completion
 from utils.pdf_loader import extract_text_with_pages
 from typing import Optional, List
 
@@ -143,22 +143,22 @@ async def general_chat(
         # No file, just standard text
         api_messages.append({"role": last_msg.role, "content": last_msg.content})
 
-    # 4. Call Groq
+    # 4. Call Groq with retry logic
     try:
-        client = get_groq_client()
-        response = client.chat.completions.create(
-            model=model_to_use,
+        answer = chat_completion(
             messages=api_messages,
+            model=model_to_use,
             temperature=0.7,
-            max_tokens=2048,
+            max_tokens=1024,  # Reduced for speed - still plenty for most answers
         )
-        
-        answer = response.choices[0].message.content
         return ChatResponse(answer=answer)
         
     except Exception as e:
-        import traceback
-        with open("backend_error.log", "a") as f:
-            f.write(f"\n--- ERROR ---\n")
-            traceback.print_exc(file=f)
+        import traceback, os as _os
+        try:
+            with open("backend_error.log", "a") as f:
+                f.write(f"\n--- ERROR ---\n")
+                traceback.print_exc(file=f)
+        except Exception:
+            pass
         raise HTTPException(status_code=500, detail=str(e))

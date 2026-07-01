@@ -139,12 +139,12 @@ async def perform_research_action(req: ResearchActionRequest):
                 if c.get("doc_id") == doc["doc_id"]:
                     all_context.append(f"[{doc['filename']}]: {c['text']}")
         
-        context = "\n\n".join(all_context[:15])
+        context = "\n\n".join(all_context[:10])
         result = system_user_chat(
             system_prompt=RESEARCH_SYSTEM,
             user_message=f"Summarize these research documents:\nDocuments: {', '.join(doc_names)}\n\nContent samples:\n{context}\n\nProvide a structured summary for each document (2-3 paragraphs each) followed by an overall synthesis.",
             temperature=0.4,
-            max_tokens=2500,
+            max_tokens=1500,
         )
     
     elif req.action == "compare":
@@ -154,7 +154,7 @@ async def perform_research_action(req: ResearchActionRequest):
             system_prompt=RESEARCH_SYSTEM,
             user_message=f"Compare these documents: {', '.join(doc_names)}\n\nContent:\n{context}\n\nCreate a detailed comparison covering: methodology, findings, conclusions, similarities, and differences. Use a structured format with headers.",
             temperature=0.4,
-            max_tokens=2500,
+            max_tokens=1500,
         )
     
     elif req.action == "study_notes":
@@ -164,7 +164,7 @@ async def perform_research_action(req: ResearchActionRequest):
             system_prompt=RESEARCH_SYSTEM,
             user_message=f"Create comprehensive study notes from these documents: {', '.join(doc_names)}\n\nContent:\n{context}\n\nFormat as: Key Concepts, Important Definitions, Main Arguments, Critical Points, Questions for Further Study.",
             temperature=0.4,
-            max_tokens=2500,
+            max_tokens=1500,
         )
     
     elif req.action == "key_takeaways":

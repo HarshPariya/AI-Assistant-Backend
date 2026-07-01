@@ -56,26 +56,29 @@ def vision_chat(image_path: str, prompt: str) -> str:
     
     image_b64 = encode_image_to_base64(image_path)
     
-    response = client.chat.completions.create(
+    from utils.llm import chat_completion
+    
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:{media_type};base64,{image_b64}"
+                    }
+                },
+                {"type": "text", "text": prompt}
+            ]
+        }
+    ]
+    
+    return chat_completion(
+        messages=messages,
         model=model,
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:{media_type};base64,{image_b64}"
-                        }
-                    },
-                    {"type": "text", "text": prompt}
-                ]
-            }
-        ],
-        max_tokens=1024,
         temperature=0.4,
+        max_tokens=1024,
     )
-    return response.choices[0].message.content
 
 
 @router.post("/analyze", response_model=VisionAnalysis)

@@ -81,8 +81,13 @@ async def upload_pdf(file: UploadFile = File(...)):
 @router.post("/ask", response_model=ChatResponse)
 async def ask_question(req: ChatRequest):
     """Ask a question about the uploaded PDF using RAG."""
-    # Retrieve relevant chunks
-    relevant_chunks = similarity_search(req.session_id, req.message, top_k=5)
+    try:
+        relevant_chunks = similarity_search(req.session_id, req.message, top_k=5)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=400,
+            detail="Session expired due to server sleep. Please re-upload your document."
+        )
     
     if not relevant_chunks:
         raise HTTPException(

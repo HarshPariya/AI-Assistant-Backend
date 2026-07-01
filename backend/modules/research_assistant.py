@@ -108,11 +108,19 @@ async def perform_research_action(req: ResearchActionRequest):
     if not documents:
         raise HTTPException(status_code=404, detail="Session not found. Upload PDFs first.")
     
+    import os
+    store_path = os.path.join(os.getenv("VECTOR_STORE_DIR", "vector_store"), f"{req.session_id}.pkl")
+    if not os.path.exists(store_path):
+        raise HTTPException(status_code=400, detail="Session expired due to server sleep. Please re-upload your PDFs.")
+    
     doc_names = [d["filename"] for d in documents]
     
     if req.action == "ask" and req.query:
         # RAG-based question answering
-        chunks = similarity_search(req.session_id, req.query, top_k=6)
+        try:
+            chunks = similarity_search(req.session_id, req.query, top_k=6)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Session expired due to server sleep. Please re-upload your PDFs.")
         context = "\n\n".join([f"[{c['doc_name']} - Page {c['page']}]: {c['text']}" for c in chunks])
         
         result = system_user_chat(

@@ -1,0 +1,36 @@
+# AI Career & Research Assistant — Python Dependencies
+# Install with: uv pip install -r requirements.txt --system
+
+# Web Framework
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+python-multipart==0.0.18
+
+# Groq API (LLM + Vision)
+groq==0.13.1
+
+# LangChain ecosystem
+langchain==0.3.13
+langchain-groq==0.2.3
+langchain-community==0.3.13
+
+# Embeddings (pure Python - works on all Python versions)
+sentence-transformers==3.3.1
+
+# PDF Processing
+PyMuPDF==1.25.1
+pypdf==5.1.0
+
+# Image Processing
+Pillow==11.0.0
+
+# Environment & Config
+python-dotenv==1.0.1
+pydantic==2.10.3
+pydantic-settings==2.7.0
+
+# HTTP & Utils
+httpx==0.28.1
+aiofiles==24.1.0
+numpy==2.1.3
+scikit-learn==1.5.2

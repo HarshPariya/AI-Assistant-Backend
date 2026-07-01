@@ -1,0 +1,24 @@
+# Environments
+.env
+.env.*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+venv/
+env/
+.venv/
+
+# Data and Uploads
+uploaded_files/
+vector_store/
+
+# Frontend (as it has its own repo)
+frontend/
+
+# IDEs
+.idea/
+.vscode/
+*.swp

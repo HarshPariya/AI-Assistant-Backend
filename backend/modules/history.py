@@ -1,42 +1,30 @@
 """
-History Module — Stores and retrieves per-user chat history using SQLite.
+History Module — Stores and retrieves per-user chat history using MongoDB.
 """
-import sqlite3
+import os
 import json
 import uuid
 from datetime import datetime
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import List, Optional
+from pymongo import MongoClient
 
 router = APIRouter()
 
-DB_PATH = "history.db"
-
-
-def get_db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+# MongoDB setup
+MONGODB_URL = os.getenv("MONGODB_URL")
+# Use a fallback in case it's not provided so it doesn't crash on import
+client = MongoClient(MONGODB_URL) if MONGODB_URL else None
+db = client["ai_assistant"] if client else None
+collection = db["conversations"] if db else None
 
 
 def init_db():
-    """Create tables if they don't exist."""
-    conn = get_db()
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS conversations (
-            id TEXT PRIMARY KEY,
-            user_id TEXT NOT NULL,
-            module TEXT NOT NULL DEFAULT 'general',
-            title TEXT,
-            messages TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        )
-    """)
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_user_id ON conversations(user_id)")
-    conn.commit()
-    conn.close()
+    """Create indexes if using MongoDB."""
+    if collection is not None:
+        collection.create_index("user_id")
+        collection.create_index([("user_id", 1), ("module", 1)])
 
 
 # ─── Pydantic Models ─────────────────────────────────────────────────────────
@@ -80,7 +68,9 @@ class ConversationDetail(BaseModel):
 @router.post("/save")
 async def save_conversation(req: SaveConversationRequest):
     """Save or update a conversation for a user."""
-    conn = get_db()
+    if collection is None:
+        raise HTTPException(status_code=500, detail="MongoDB not configured")
+
     now = datetime.utcnow().isoformat()
 
     # Auto-generate title from first user message
@@ -92,91 +82,78 @@ async def save_conversation(req: SaveConversationRequest):
         else:
             title = "New Conversation"
 
-    messages_json = json.dumps([m.dict() for m in req.messages])
+    messages_list = [m.dict() for m in req.messages]
 
     session_id = req.session_id
 
     if session_id:
         # Try to update existing session
-        existing = conn.execute(
-            "SELECT id FROM conversations WHERE id = ? AND user_id = ?",
-            (session_id, req.user_id)
-        ).fetchone()
+        existing = collection.find_one({"_id": session_id, "user_id": req.user_id})
         if existing:
-            conn.execute(
-                """UPDATE conversations
-                   SET messages = ?, title = ?, updated_at = ?
-                   WHERE id = ? AND user_id = ?""",
-                (messages_json, title, now, session_id, req.user_id)
+            collection.update_one(
+                {"_id": session_id},
+                {"$set": {"messages": messages_list, "title": title, "updated_at": now}}
             )
-            conn.commit()
-            conn.close()
             return {"id": session_id, "title": title, "action": "updated"}
 
     # Create new session
     new_id = str(uuid.uuid4())
-    conn.execute(
-        """INSERT INTO conversations (id, user_id, module, title, messages, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?)""",
-        (new_id, req.user_id, req.module, title, messages_json, now, now)
-    )
-    conn.commit()
-    conn.close()
+    doc = {
+        "_id": new_id,
+        "user_id": req.user_id,
+        "module": req.module,
+        "title": title,
+        "messages": messages_list,
+        "created_at": now,
+        "updated_at": now
+    }
+    collection.insert_one(doc)
     return {"id": new_id, "title": title, "action": "created"}
 
 
 @router.get("/user/{user_id}")
 async def get_user_history(user_id: str, module: Optional[str] = None, limit: int = 50):
     """Get all conversation summaries for a user."""
-    conn = get_db()
-    if module:
-        rows = conn.execute(
-            """SELECT id, user_id, module, title, messages, created_at, updated_at
-               FROM conversations WHERE user_id = ? AND module = ?
-               ORDER BY updated_at DESC LIMIT ?""",
-            (user_id, module, limit)
-        ).fetchall()
-    else:
-        rows = conn.execute(
-            """SELECT id, user_id, module, title, messages, created_at, updated_at
-               FROM conversations WHERE user_id = ?
-               ORDER BY updated_at DESC LIMIT ?""",
-            (user_id, limit)
-        ).fetchall()
-    conn.close()
+    if collection is None:
+        raise HTTPException(status_code=500, detail="MongoDB not configured")
 
+    query = {"user_id": user_id}
+    if module:
+        query["module"] = module
+
+    cursor = collection.find(query).sort("updated_at", -1).limit(limit)
+    
     return [
         {
-            "id": row["id"],
+            "id": row["_id"],
             "user_id": row["user_id"],
             "module": row["module"],
             "title": row["title"],
-            "message_count": len(json.loads(row["messages"])),
+            "message_count": len(row.get("messages", [])),
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
         }
-        for row in rows
+        for row in cursor
     ]
 
 
 @router.get("/session/{session_id}")
 async def get_conversation(session_id: str):
     """Get a full conversation by session ID."""
-    conn = get_db()
-    row = conn.execute(
-        "SELECT * FROM conversations WHERE id = ?", (session_id,)
-    ).fetchone()
-    conn.close()
+    if collection is None:
+        raise HTTPException(status_code=500, detail="MongoDB not configured")
+
+    row = collection.find_one({"_id": session_id})
 
     if not row:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
     return {
-        "id": row["id"],
+        "id": row["_id"],
         "user_id": row["user_id"],
         "module": row["module"],
         "title": row["title"],
-        "messages": json.loads(row["messages"]),
+        "messages": row.get("messages", []),
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
@@ -185,13 +162,12 @@ async def get_conversation(session_id: str):
 @router.delete("/session/{session_id}")
 async def delete_conversation(session_id: str, user_id: str):
     """Delete a conversation (only by its owner)."""
-    conn = get_db()
-    result = conn.execute(
-        "DELETE FROM conversations WHERE id = ? AND user_id = ?", (session_id, user_id)
-    )
-    conn.commit()
-    conn.close()
+    if collection is None:
+        raise HTTPException(status_code=500, detail="MongoDB not configured")
 
-    if result.rowcount == 0:
+    result = collection.delete_one({"_id": session_id, "user_id": user_id})
+
+    if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Conversation not found or not authorized")
     return {"deleted": True}
+

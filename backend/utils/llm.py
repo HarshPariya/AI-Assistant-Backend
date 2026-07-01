@@ -32,7 +32,11 @@ def get_groq_client() -> Groq:
 
 def get_model() -> str:
     """Get the text model name."""
-    return os.getenv("GROQ_MODEL", TEXT_MODEL_DEFAULT)
+    model = os.getenv("GROQ_MODEL", TEXT_MODEL_DEFAULT)
+    # Hard override for the rate-limited 70b model in case Render still has it in env variables
+    if model == "llama-3.3-70b-versatile":
+        return TEXT_MODEL_DEFAULT
+    return model
 
 
 def get_vision_model() -> str:

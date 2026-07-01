@@ -13,6 +13,7 @@ from utils.pdf_loader import extract_text_from_pdf
 router = APIRouter()
 
 UPLOAD_DIR = os.getenv("UPLOAD_DIR", "uploaded_files")
+MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
 
 
 class ResumeAnalysis(BaseModel):
@@ -54,51 +55,54 @@ Return ONLY valid JSON with this exact structure:
 @router.post("/analyze", response_model=ResumeAnalysis)
 async def analyze_resume(file: UploadFile = File(...)):
     """Upload a PDF resume and get comprehensive ATS analysis."""
-    if not file.filename.endswith(".pdf"):
+    if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are supported.")
-    
+
+    # Read and validate file size
+    content = await file.read()
+    if len(content) > MAX_FILE_SIZE:
+        raise HTTPException(status_code=400, detail="File too large. Maximum size is 10MB.")
+
     # Save uploaded file
     file_id = str(uuid.uuid4())
     file_path = os.path.join(UPLOAD_DIR, f"resume_{file_id}.pdf")
     os.makedirs(UPLOAD_DIR, exist_ok=True)
-    
-    content = await file.read()
+
     with open(file_path, "wb") as f:
         f.write(content)
-    
+
     # Extract text
     try:
         resume_text = extract_text_from_pdf(file_path)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to extract PDF text: {str(e)}")
     finally:
-        # Clean up temp file
         if os.path.exists(file_path):
             os.remove(file_path)
-    
+
     if len(resume_text.strip()) < 100:
         raise HTTPException(status_code=400, detail="PDF appears to be empty or unreadable.")
-    
-    # Analyze with Groq
+
+    # Analyze with Groq — reduced tokens for speed
     try:
         response = system_user_chat(
             system_prompt=RESUME_SYSTEM_PROMPT,
-            user_message=f"Analyze this resume:\n\n{resume_text[:6000]}",
+            user_message=f"Analyze this resume:\n\n{resume_text[:5000]}",
             temperature=0.3,
-            max_tokens=2048,
+            max_tokens=1200,
         )
-        
-        # Parse JSON response
-        # Strip markdown code blocks if present
+
+        # Parse JSON response — strip markdown code blocks if present
         cleaned = response.strip()
         if cleaned.startswith("```"):
-            cleaned = cleaned.split("```")[1]
+            parts = cleaned.split("```")
+            cleaned = parts[1] if len(parts) > 1 else cleaned
             if cleaned.startswith("json"):
                 cleaned = cleaned[4:]
-        
+
         analysis = json.loads(cleaned)
         return ResumeAnalysis(**analysis)
-    
+
     except json.JSONDecodeError as e:
         raise HTTPException(status_code=500, detail=f"Failed to parse AI response: {str(e)}")
     except Exception as e:

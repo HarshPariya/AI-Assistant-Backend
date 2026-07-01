@@ -1,7 +1,9 @@
 """
 Groq LLM Client — Centralized LLM access for all modules
+Optimized for speed: lower max_tokens defaults, async-safe retries
 """
 import os
+import time
 from groq import Groq
 from dotenv import load_dotenv
 
@@ -9,9 +11,13 @@ load_dotenv()
 
 _client: Groq | None = None
 
+# Active vision model (llama-4-scout replaces decommissioned llama-3.2-90b-vision-preview)
+VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
+TEXT_MODEL_DEFAULT = "llama-3.1-8b-instant"
+
 
 def get_groq_client() -> Groq:
-    """Get or create a Groq client instance."""
+    """Get or create a Groq client instance (singleton)."""
     global _client
     if _client is None:
         api_key = os.getenv("GROQ_API_KEY")
@@ -25,24 +31,32 @@ def get_groq_client() -> Groq:
 
 
 def get_model() -> str:
-    return os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+    """Get the text model name."""
+    return os.getenv("GROQ_MODEL", TEXT_MODEL_DEFAULT)
 
 
 def get_vision_model() -> str:
-    # Hardcode to the working model to bypass cached environment variables in the terminal
-    return "meta-llama/llama-4-scout-17b-16e-instruct"
+    """Get the vision model name. Always returns the active non-decommissioned model."""
+    # Force the working model — bypass any stale env vars
+    return VISION_MODEL
 
 
-import time
-
-def chat_completion(messages: list[dict], model: str | None = None, temperature: float = 0.7, max_tokens: int = 4096) -> str:
-    """Run a chat completion with Groq with robust retry logic."""
+def chat_completion(
+    messages: list[dict],
+    model: str | None = None,
+    temperature: float = 0.7,
+    max_tokens: int = 1024,  # Reduced default for speed (was 4096)
+) -> str:
+    """
+    Run a chat completion with Groq with robust retry logic.
+    Uses linear backoff to avoid blocking the event loop excessively.
+    """
     client = get_groq_client()
     selected_model = model or get_model()
-    
+
     max_retries = 3
-    base_delay = 2
-    
+    last_error = None
+
     for attempt in range(max_retries):
         try:
             response = client.chat.completions.create(
@@ -53,17 +67,30 @@ def chat_completion(messages: list[dict], model: str | None = None, temperature:
             )
             return response.choices[0].message.content
         except Exception as e:
-            if attempt == max_retries - 1:
-                print(f"Groq API Error after {max_retries} attempts: {str(e)}")
+            last_error = e
+            error_str = str(e).lower()
+            # Don't retry on client errors (4xx) — only on rate limits / server errors
+            if "400" in str(e) or "401" in str(e) or "403" in str(e):
+                print(f"Groq API Client Error (no retry): {str(e)}")
                 raise
-            
-            # Exponential backoff
-            sleep_time = base_delay * (2 ** attempt)
-            print(f"Groq API Error: {str(e)}. Retrying in {sleep_time}s...")
-            time.sleep(sleep_time)
+
+            if attempt < max_retries - 1:
+                # Short linear backoff: 1s, 2s — don't wait too long
+                sleep_time = attempt + 1
+                print(f"Groq API Error (attempt {attempt + 1}): {str(e)}. Retrying in {sleep_time}s...")
+                time.sleep(sleep_time)
+            else:
+                print(f"Groq API Error after {max_retries} attempts: {str(e)}")
+                raise last_error
 
 
-def system_user_chat(system_prompt: str, user_message: str, model: str | None = None, temperature: float = 0.7, max_tokens: int = 4096) -> str:
+def system_user_chat(
+    system_prompt: str,
+    user_message: str,
+    model: str | None = None,
+    temperature: float = 0.7,
+    max_tokens: int = 1024,  # Reduced default for speed
+) -> str:
     """Convenience wrapper for system + user message pattern."""
     messages = [
         {"role": "system", "content": system_prompt},

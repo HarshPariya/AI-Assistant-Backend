@@ -13,6 +13,7 @@ from utils.embeddings import build_and_save_vector_store, similarity_search
 router = APIRouter()
 
 UPLOAD_DIR = os.getenv("UPLOAD_DIR", "uploaded_files")
+MAX_FILE_SIZE = 15 * 1024 * 1024  # 15 MB
 
 # In-memory session chat history
 chat_sessions: dict[str, list[dict]] = {}
@@ -47,26 +48,30 @@ async def upload_pdf(file: UploadFile = File(...)):
     """Upload a PDF and create a vector store for RAG."""
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are supported.")
-    
+
+    # Read and validate file size
+    content = await file.read()
+    if len(content) > MAX_FILE_SIZE:
+        raise HTTPException(status_code=400, detail="File too large. Maximum size is 15MB.")
+
     session_id = str(uuid.uuid4())
     file_path = os.path.join(UPLOAD_DIR, f"chat_{session_id}.pdf")
     os.makedirs(UPLOAD_DIR, exist_ok=True)
-    
-    content = await file.read()
+
     with open(file_path, "wb") as f:
         f.write(content)
-    
+
     try:
         pages = extract_text_with_pages(file_path)
         if not pages:
             raise HTTPException(status_code=400, detail="No text found in the PDF.")
-        
+
         chunks = chunk_pages(pages)
         chunk_count = build_and_save_vector_store(session_id, chunks)
-        
+
         # Initialize chat session
         chat_sessions[session_id] = []
-        
+
         return UploadResponse(
             session_id=session_id,
             filename=file.filename,
@@ -82,57 +87,55 @@ async def upload_pdf(file: UploadFile = File(...)):
 async def ask_question(req: ChatRequest):
     """Ask a question about the uploaded PDF using RAG."""
     try:
-        relevant_chunks = similarity_search(req.session_id, req.message, top_k=5)
-    except ValueError as e:
+        relevant_chunks = similarity_search(req.session_id, req.message, top_k=4)
+    except ValueError:
         raise HTTPException(
             status_code=400,
             detail="Session expired due to server sleep. Please re-upload your document."
         )
-    
+
     if not relevant_chunks:
         raise HTTPException(
             status_code=404,
             detail="No documents found for this session. Please upload a PDF first."
         )
-    
+
     # Build context from chunks
     context_parts = []
     sources = []
     seen_pages = set()
-    
+
     for chunk in relevant_chunks:
         context_parts.append(f"[Page {chunk['page']}]: {chunk['text']}")
-        if chunk['page'] not in seen_pages:
-            sources.append({"page": chunk['page'], "score": round(chunk.get('score', 0), 3)})
-            seen_pages.add(chunk['page'])
-    
+        if chunk["page"] not in seen_pages:
+            sources.append({"page": chunk["page"], "score": round(chunk.get("score", 0), 3)})
+            seen_pages.add(chunk["page"])
+
     context = "\n\n".join(context_parts)
-    
-    # Build conversation history
+
+    # Build conversation history (last 3 exchanges only for speed)
     history = chat_sessions.get(req.session_id, [])
-    
+
     messages = [
         {"role": "system", "content": RAG_SYSTEM},
     ]
-    
-    # Add last 4 exchanges for context
-    for exchange in history[-4:]:
+
+    for exchange in history[-3:]:
         messages.append({"role": "user", "content": exchange["question"]})
         messages.append({"role": "assistant", "content": exchange["answer"]})
-    
+
     messages.append({
         "role": "user",
-        "content": f"Context from the document:\n{context}\n\nQuestion: {req.message}"
+        "content": f"Context from the document:\n{context[:6000]}\n\nQuestion: {req.message}"
     })
-    
-    from utils.llm import chat_completion
+
     answer = chat_completion(
         messages=messages,
         model=get_model(),
         temperature=0.3,
-        max_tokens=1024,
+        max_tokens=800,  # Reduced from 1024
     )
-    
+
     # Update session history
     if req.session_id not in chat_sessions:
         chat_sessions[req.session_id] = []
@@ -140,7 +143,7 @@ async def ask_question(req: ChatRequest):
         "question": req.message,
         "answer": answer,
     })
-    
+
     return ChatResponse(
         answer=answer,
         sources=sorted(sources, key=lambda x: x["page"]),

@@ -2,6 +2,7 @@
 AI Career & Research Assistant — FastAPI Backend
 """
 import os
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
@@ -11,7 +12,7 @@ os.environ["USE_TF"] = "0"
 os.environ["USE_TORCH"] = "1"
 os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
 
-# Load environment variables
+# Load environment variables FIRST before importing modules
 load_dotenv()
 
 # Create required directories
@@ -26,24 +27,44 @@ from modules.image_captioning import router as vision_router
 from modules.general_chat import router as general_chat_router
 from modules.history import router as history_router, init_db
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Startup: warm up the Groq client and initialize DB on boot."""
+    try:
+        init_db()
+        # Pre-initialize the Groq client singleton so first request is instant
+        from utils.llm import get_groq_client
+        get_groq_client()
+        print("✅ Groq client initialized.")
+    except Exception as e:
+        print(f"⚠️  Startup warning: {e}")
+    yield
+    # Cleanup (if needed) goes here
+
+
 app = FastAPI(
     title="AI Career & Research Assistant API",
     description="Multi-Modal GenAI Platform with Groq LLM",
-    version="1.0.0",
-    on_startup=[init_db],
+    version="1.1.0",
+    lifespan=lifespan,
 )
 
-# CORS - allow Next.js frontend
-frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
+# CORS - allow Next.js frontend and deployed URLs
+allowed_origins = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "https://ai-assistant-gamma-sable.vercel.app",
+]
+
+# Also allow any env-configured frontend URL
+frontend_url = os.getenv("FRONTEND_URL", "")
+if frontend_url and frontend_url not in allowed_origins:
+    allowed_origins.append(frontend_url)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "https://ai-assistant-gamma-sable.vercel.app",
-        frontend_url
-    ],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -64,7 +85,7 @@ async def health_check():
     return {
         "status": "ok",
         "message": "AI Career & Research Assistant API is running",
-        "version": "1.0.0",
+        "version": "1.1.0",
     }
 
 

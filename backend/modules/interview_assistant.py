@@ -69,9 +69,11 @@ async def get_roles():
 @router.post("/generate", response_model=QuestionResponse)
 async def generate_questions(req: GenerateRequest):
     """Generate interview questions for a specific role."""
+    # Cap questions at 10 for speed
+    num_q = min(req.num_questions, 10)
     focus = f" Focus on: {', '.join(req.focus_areas)}." if req.focus_areas else ""
-    
-    prompt = f"""Generate {req.num_questions} interview questions for a {req.experience_level}-level {req.role} position.{focus}
+
+    prompt = f"""Generate {num_q} interview questions for a {req.experience_level}-level {req.role} position.{focus}
 
 Return JSON:
 {{
@@ -83,21 +85,22 @@ Return JSON:
       "difficulty": "<Easy|Medium|Hard>",
       "expected_time": "<2-3 minutes>",
       "hint": "<brief hint for the interviewer>",
-      "model_answer": "<a detailed, exemplary answer (2-3 paragraphs) that a strong candidate would give>"
+      "model_answer": "<a detailed exemplary answer (1-2 paragraphs) a strong candidate would give>"
     }}
   ]
 }}"""
-    
+
     try:
         response = system_user_chat(
             system_prompt=INTERVIEW_SYSTEM,
             user_message=prompt,
             temperature=0.7,
-            max_tokens=3000,
+            max_tokens=1800,  # Reduced from 3000
         )
         cleaned = response.strip()
         if cleaned.startswith("```"):
-            cleaned = cleaned.split("```")[1]
+            parts = cleaned.split("```")
+            cleaned = parts[1] if len(parts) > 1 else cleaned
             if cleaned.startswith("json"):
                 cleaned = cleaned[4:]
         data = json.loads(cleaned)
@@ -106,6 +109,8 @@ Return JSON:
             role=req.role,
             total=len(data["questions"]),
         )
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=500, detail="Failed to parse AI response as JSON. Please try again.")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -116,10 +121,10 @@ async def evaluate_mock_answer(req: MockInterviewRequest):
     history_text = ""
     if req.conversation_history:
         history_text = "\n\nConversation so far:\n" + "\n".join(
-            [f"Q: {h.get('question','')}\nA: {h.get('answer','')}" 
-             for h in req.conversation_history[-3:]]
+            [f"Q: {h.get('question', '')}\nA: {h.get('answer', '')}"
+             for h in req.conversation_history[-2:]]  # Reduced to last 2 for speed
         )
-    
+
     prompt = f"""Role: {req.role}
 Question asked: {req.question}
 Candidate's answer: {req.user_answer}{history_text}
@@ -132,21 +137,24 @@ Evaluate and return JSON:
   "tips": ["<tip1>", "<tip2>", "<tip3>"],
   "model_answer_hint": "<brief hint on what a strong answer would include>"
 }}"""
-    
+
     try:
         response = system_user_chat(
             system_prompt=EVAL_SYSTEM,
             user_message=prompt,
             temperature=0.4,
-            max_tokens=1500,
+            max_tokens=800,  # Reduced from 1500
         )
         cleaned = response.strip()
         if cleaned.startswith("```"):
-            cleaned = cleaned.split("```")[1]
+            parts = cleaned.split("```")
+            cleaned = parts[1] if len(parts) > 1 else cleaned
             if cleaned.startswith("json"):
                 cleaned = cleaned[4:]
         data = json.loads(cleaned)
         return MockInterviewResponse(**data)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=500, detail="Failed to parse AI response. Please try again.")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -154,14 +162,14 @@ Evaluate and return JSON:
 @router.post("/answer")
 async def generate_model_answer(role: str, question: str):
     """Generate a model answer for an interview question."""
-    prompt = f"Role: {role}\nQuestion: {question}\n\nProvide a comprehensive, structured model answer (2-3 paragraphs) that a senior candidate would give. Include specific examples and technical details."
-    
+    prompt = f"Role: {role}\nQuestion: {question}\n\nProvide a comprehensive, structured model answer (1-2 paragraphs) that a senior candidate would give. Include specific examples and technical details."
+
     try:
         response = system_user_chat(
             system_prompt="You are an expert technical interviewer. Provide exemplary interview answers.",
             user_message=prompt,
             temperature=0.5,
-            max_tokens=800,
+            max_tokens=600,  # Reduced from 800
         )
         return {"answer": response}
     except Exception as e:

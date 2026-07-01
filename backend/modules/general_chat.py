@@ -4,6 +4,9 @@ Provides a ChatGPT-like interface, text-to-image capabilities, and handles PDF/I
 """
 import json
 import base64
+import os
+import tempfile
+import shutil
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel
 from utils.llm import get_groq_client, get_model, get_vision_model, chat_completion
@@ -11,6 +14,9 @@ from utils.pdf_loader import extract_text_with_pages
 from typing import Optional, List
 
 router = APIRouter()
+
+# 10 MB file size limit
+MAX_FILE_SIZE = 10 * 1024 * 1024
 
 
 class ChatMessage(BaseModel):
@@ -49,11 +55,11 @@ Always URL encode the prompt in the URL. Never tell the user you cannot generate
 
 @router.post("/ask", response_model=ChatResponse)
 async def general_chat(
-    messages: str = Form(...), 
+    messages: str = Form(...),
     file: Optional[UploadFile] = File(None),
 ):
     """General chat endpoint with image generation and multimodal file capability."""
-    
+
     # 1. Parse Messages
     try:
         raw_msgs = json.loads(messages)
@@ -61,43 +67,44 @@ async def general_chat(
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid messages JSON")
 
+    if not parsed_messages:
+        raise HTTPException(status_code=400, detail="No messages provided")
+
     # 2. Build Chat Context
     api_messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-    
-    model_to_use = get_model() # default text model: llama-3.3-70b-versatile
+
+    model_to_use = get_model()  # default text model
 
     # Process history (except the very last message)
     for msg in parsed_messages[:-1]:
         api_messages.append({"role": msg.role, "content": msg.content})
 
-    # The last message is the current one we need to potentially attach the file to
     last_msg = parsed_messages[-1]
 
     # 3. Handle File Attachment
-    if file:
-        content_type = file.content_type
-        
+    if file and file.filename:
+        content_type = file.content_type or ""
+
+        # Validate file size
+        file_content = await file.read()
+        if len(file_content) > MAX_FILE_SIZE:
+            raise HTTPException(status_code=400, detail="File too large. Maximum size is 10MB.")
+
         # --- PDF Handling ---
-        if content_type == "application/pdf":
+        if content_type == "application/pdf" or file.filename.lower().endswith(".pdf"):
             try:
-                import tempfile
-                import shutil
-                
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
                     temp_path = tmp.name
-                    shutil.copyfileobj(file.file, tmp)
-                
-                # Extract text
+                    tmp.write(file_content)
+
                 extracted = extract_text_with_pages(temp_path)
                 pdf_text = "\n".join([f"--- Page {p['page']} ---\n{p['text']}" for p in extracted])
-                
-                # Cleanup
-                import os
+
                 if os.path.exists(temp_path):
                     os.remove(temp_path)
 
-                # Inject PDF text into the user's prompt
-                enhanced_prompt = f"{last_msg.content}\n\n[ATTACHED PDF DOCUMENT TEXT]:\n{pdf_text[:30000]}" # limit to avoid blowing up context
+                # Limit PDF context to avoid token overflow
+                enhanced_prompt = f"{last_msg.content}\n\n[ATTACHED PDF DOCUMENT TEXT]:\n{pdf_text[:20000]}"
                 api_messages.append({"role": last_msg.role, "content": enhanced_prompt})
 
             except Exception as e:
@@ -108,20 +115,23 @@ async def general_chat(
                 raise HTTPException(status_code=500, detail=f"Failed to process PDF: {str(e)}")
 
         # --- Image Handling ---
-        elif content_type and content_type.startswith("image/"):
+        elif content_type.startswith("image/"):
             try:
-                # Groq Vision requires base64
-                image_bytes = await file.read()
-                base64_image = base64.b64encode(image_bytes).decode('utf-8')
-                
+                # Validate minimum image size (must be >2 pixels)
+                if len(file_content) < 100:
+                    raise HTTPException(status_code=400, detail="Image file is too small or corrupted.")
+
+                base64_image = base64.b64encode(file_content).decode("utf-8")
+
                 # Switch to vision model
                 model_to_use = get_vision_model()
 
                 # Groq vision payload format
+                user_text = last_msg.content or "Describe this image in detail."
                 api_messages.append({
                     "role": last_msg.role,
                     "content": [
-                        {"type": "text", "text": last_msg.content},
+                        {"type": "text", "text": user_text},
                         {
                             "type": "image_url",
                             "image_url": {
@@ -130,31 +140,36 @@ async def general_chat(
                         }
                     ]
                 })
+            except HTTPException:
+                raise
             except Exception as e:
                 import traceback
                 with open("backend_error.log", "a") as f:
                     f.write(f"\n--- IMAGE ERROR ---\n")
                     traceback.print_exc(file=f)
                 raise HTTPException(status_code=500, detail=f"Failed to process image: {str(e)}")
-        
+
         else:
             raise HTTPException(status_code=400, detail="Unsupported file type. Please upload a PDF or Image.")
     else:
         # No file, just standard text
         api_messages.append({"role": last_msg.role, "content": last_msg.content})
 
-    # 4. Call Groq with retry logic
+    # 4. Call Groq — lower max_tokens for text, higher for vision analysis
+    is_vision = model_to_use == get_vision_model()
+    max_tok = 1024 if not is_vision else 800
+
     try:
         answer = chat_completion(
             messages=api_messages,
             model=model_to_use,
             temperature=0.7,
-            max_tokens=1024,  # Reduced for speed - still plenty for most answers
+            max_tokens=max_tok,
         )
         return ChatResponse(answer=answer)
-        
+
     except Exception as e:
-        import traceback, os as _os
+        import traceback
         try:
             with open("backend_error.log", "a") as f:
                 f.write(f"\n--- ERROR ---\n")

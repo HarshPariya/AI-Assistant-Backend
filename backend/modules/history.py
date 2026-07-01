@@ -16,8 +16,8 @@ router = APIRouter()
 MONGODB_URL = os.getenv("MONGODB_URL")
 # Use a fallback in case it's not provided so it doesn't crash on import
 client = MongoClient(MONGODB_URL) if MONGODB_URL else None
-db = client["ai_assistant"] if client else None
-collection = db["conversations"] if db else None
+db = client["ai_assistant"] if client is not None else None
+collection = db["conversations"] if db is not None else None
 
 
 def init_db():

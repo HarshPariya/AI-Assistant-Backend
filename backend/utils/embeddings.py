@@ -11,6 +11,10 @@ os.environ["USE_TF"] = "0"
 os.environ["USE_TORCH"] = "1"
 os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
 
+# Reduce memory and CPU footprint for serverless/Render deployments
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+
 import pickle
 import numpy as np
 from sentence_transformers import SentenceTransformer
@@ -18,7 +22,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 
 from utils.session_store import save_vector_store, load_vector_store
 
-VECTOR_STORE_DIR = os.getenv("VECTOR_STORE_DIR", "vector_store")
+VECTOR_STORE_DIR = os.getenv("VECTOR_STORE_DIR", "/tmp/vector_store")
 
 _embedding_model: SentenceTransformer | None = None
 

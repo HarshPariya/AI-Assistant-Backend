@@ -14,10 +14,25 @@ router = APIRouter()
 
 # MongoDB setup
 MONGODB_URL = os.getenv("MONGODB_URL")
-# Use a fallback in case it's not provided so it doesn't crash on import
-client = MongoClient(MONGODB_URL) if MONGODB_URL else None
-db = client["ai_assistant"] if client is not None else None
-collection = db["conversations"] if db is not None else None
+client = None
+db = None
+collection = None
+
+if MONGODB_URL:
+    try:
+        client = MongoClient(
+            MONGODB_URL,
+            serverSelectionTimeoutMS=5000,
+            connectTimeoutMS=5000,
+            retryWrites=True,
+        )
+        db = client["ai_assistant"]
+        collection = db["conversations"]
+    except Exception as e:
+        print(f"⚠️  MongoDB connection failed: {e}")
+        client = None
+        db = None
+        collection = None
 
 
 def init_db():
@@ -25,6 +40,11 @@ def init_db():
     if collection is not None:
         collection.create_index("user_id")
         collection.create_index([("user_id", 1), ("module", 1)])
+        collection.create_index([("user_id", 1), ("updated_at", -1)])
+        if db is not None:
+            db["vector_stores"].create_index("updated_at")
+            db["module_sessions"].create_index("type")
+        print("✅ MongoDB indexes ready.")
 
 
 # ─── Pydantic Models ─────────────────────────────────────────────────────────
@@ -135,6 +155,31 @@ async def get_user_history(user_id: str, module: Optional[str] = None, limit: in
         }
         for row in cursor
     ]
+
+
+@router.get("/user/{user_id}/latest")
+async def get_latest_conversation(user_id: str, module: str):
+    """Get the most recent conversation for a user in a specific module."""
+    if collection is None:
+        raise HTTPException(status_code=500, detail="MongoDB not configured")
+
+    row = collection.find_one(
+        {"user_id": user_id, "module": module},
+        sort=[("updated_at", -1)],
+    )
+
+    if not row:
+        return None
+
+    return {
+        "id": row["_id"],
+        "user_id": row["user_id"],
+        "module": row["module"],
+        "title": row["title"],
+        "messages": row.get("messages", []),
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
 
 
 @router.get("/session/{session_id}")

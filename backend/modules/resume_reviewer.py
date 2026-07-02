@@ -7,7 +7,7 @@ import os
 import uuid
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from pydantic import BaseModel
-from utils.llm import system_user_chat
+from utils.llm import async_system_user_chat
 from utils.pdf_loader import extract_text_from_pdf
 
 router = APIRouter()
@@ -85,11 +85,11 @@ async def analyze_resume(file: UploadFile = File(...)):
 
     # Analyze with Groq — reduced tokens for speed
     try:
-        response = system_user_chat(
+        response = await async_system_user_chat(
             system_prompt=RESUME_SYSTEM_PROMPT,
             user_message=f"Analyze this resume:\n\n{resume_text[:5000]}",
             temperature=0.3,
-            max_tokens=1200,
+            max_tokens=1000,
         )
 
         # Parse JSON response — strip markdown code blocks if present

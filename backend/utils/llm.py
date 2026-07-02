@@ -2,6 +2,7 @@
 Groq LLM Client — Centralized LLM access for all modules
 Optimized for speed: lower max_tokens defaults, async-safe retries
 """
+import asyncio
 import os
 import time
 from groq import Groq
@@ -101,3 +102,28 @@ def system_user_chat(
         {"role": "user", "content": user_message},
     ]
     return chat_completion(messages, model=model, temperature=temperature, max_tokens=max_tokens)
+
+
+async def async_chat_completion(
+    messages: list[dict],
+    model: str | None = None,
+    temperature: float = 0.7,
+    max_tokens: int = 1024,
+) -> str:
+    """Non-blocking wrapper — runs sync Groq call in a thread pool."""
+    return await asyncio.to_thread(
+        chat_completion, messages, model, temperature, max_tokens
+    )
+
+
+async def async_system_user_chat(
+    system_prompt: str,
+    user_message: str,
+    model: str | None = None,
+    temperature: float = 0.7,
+    max_tokens: int = 1024,
+) -> str:
+    """Non-blocking wrapper for system + user message pattern."""
+    return await asyncio.to_thread(
+        system_user_chat, system_prompt, user_message, model, temperature, max_tokens
+    )

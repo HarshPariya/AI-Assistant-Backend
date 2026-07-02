@@ -8,7 +8,9 @@ import uuid
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from pydantic import BaseModel
 from typing import Optional
-from utils.llm import get_groq_client, get_vision_model, chat_completion
+import asyncio
+from utils.llm import get_vision_model, chat_completion, async_chat_completion
+from utils.session_store import save_session_data, load_session_data, save_vision_image, load_vision_image
 
 router = APIRouter()
 
@@ -43,6 +45,9 @@ class VisionQAResponse(BaseModel):
 def encode_image_to_base64(file_path: str) -> str:
     with open(file_path, "rb") as f:
         return base64.b64encode(f.read()).decode("utf-8")
+
+
+import asyncio
 
 
 def vision_chat(image_path: str, prompt: str, max_tokens: int = 700) -> str:
@@ -81,6 +86,10 @@ def vision_chat(image_path: str, prompt: str, max_tokens: int = 700) -> str:
     )
 
 
+async def async_vision_chat(image_path: str, prompt: str, max_tokens: int = 700) -> str:
+    return await asyncio.to_thread(vision_chat, image_path, prompt, max_tokens)
+
+
 @router.post("/analyze", response_model=VisionAnalysis)
 async def analyze_image(file: UploadFile = File(...)):
     """Upload an image and get comprehensive visual analysis."""
@@ -105,15 +114,17 @@ async def analyze_image(file: UploadFile = File(...)):
     with open(file_path, "wb") as f:
         f.write(content)
 
-    # Store session info
+    # Store session info + persist image to MongoDB
+    save_vision_image(session_id, content, ext)
     vision_sessions[session_id] = {
         "image_path": file_path,
         "filename": file.filename,
         "conversation": [],
     }
+    save_session_data(session_id, "vision", {"filename": file.filename, "ext": ext})
 
     try:
-        full_analysis = vision_chat(
+        full_analysis = await async_vision_chat(
             file_path,
             """Analyze this image and respond with ONLY valid JSON (no markdown):
 {
@@ -147,10 +158,39 @@ async def analyze_image(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=f"Image analysis failed: {str(e)}")
 
 
+async def _get_vision_session(session_id: str) -> dict | None:
+    """Load vision session from memory or restore from MongoDB."""
+    session = vision_sessions.get(session_id)
+    if session:
+        return session
+
+    meta = load_session_data(session_id)
+    if not meta:
+        return None
+
+    image_data = load_vision_image(session_id)
+    if not image_data:
+        return None
+
+    image_bytes, ext = image_data
+    file_path = os.path.join(UPLOAD_DIR, f"vision_{session_id}{ext}")
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+    with open(file_path, "wb") as f:
+        f.write(image_bytes)
+
+    session = {
+        "image_path": file_path,
+        "filename": meta.get("filename", "image"),
+        "conversation": meta.get("conversation", []),
+    }
+    vision_sessions[session_id] = session
+    return session
+
+
 @router.post("/ask", response_model=VisionQAResponse)
 async def ask_about_image(req: VisionQARequest):
     """Ask a question about a previously uploaded image."""
-    session = vision_sessions.get(req.session_id)
+    session = await _get_vision_session(req.session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found. Upload an image first.")
 
@@ -158,7 +198,6 @@ async def ask_about_image(req: VisionQARequest):
     if not os.path.exists(image_path):
         raise HTTPException(status_code=404, detail="Image file not found. Please re-upload.")
 
-    # Build conversation context (last 2 only for speed)
     history_text = ""
     if session["conversation"]:
         history_text = "\n\nPrevious conversation:\n" + "\n".join(
@@ -166,13 +205,18 @@ async def ask_about_image(req: VisionQARequest):
         )
 
     try:
-        answer = vision_chat(
+        answer = await async_vision_chat(
             image_path,
             f"Answer this question about the image: {req.question}{history_text}\n\nProvide a clear, concise answer.",
-            max_tokens=600,
+            max_tokens=500,
         )
 
         session["conversation"].append({"q": req.question, "a": answer})
+        save_session_data(req.session_id, "vision", {
+            "filename": session.get("filename"),
+            "ext": os.path.splitext(image_path)[1],
+            "conversation": session["conversation"],
+        })
 
         return VisionQAResponse(answer=answer, session_id=req.session_id)
 

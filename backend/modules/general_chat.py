@@ -9,7 +9,7 @@ import tempfile
 import shutil
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel
-from utils.llm import get_groq_client, get_model, get_vision_model, chat_completion
+from utils.llm import get_groq_client, get_model, get_vision_model, async_chat_completion
 from utils.pdf_loader import extract_text_with_pages
 from typing import Optional, List
 
@@ -160,7 +160,7 @@ async def general_chat(
     max_tok = 1024 if not is_vision else 800
 
     try:
-        answer = chat_completion(
+        answer = await async_chat_completion(
             messages=api_messages,
             model=model_to_use,
             temperature=0.7,

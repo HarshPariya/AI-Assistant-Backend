@@ -1,6 +1,7 @@
 """
 AI Career & Research Assistant — FastAPI Backend
 """
+import asyncio
 import os
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -30,13 +31,19 @@ from modules.history import router as history_router, init_db
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startup: warm up the Groq client and initialize DB on boot."""
+    """Startup: warm up Groq client, embeddings, and MongoDB on boot."""
     try:
         init_db()
-        # Pre-initialize the Groq client singleton so first request is instant
         from utils.llm import get_groq_client
         get_groq_client()
-        print("✅ Groq client initialized.")
+        from utils.embeddings import preload_embedding_model
+        await asyncio.to_thread(preload_embedding_model)
+        from utils.session_store import is_available
+        if is_available():
+            print("✅ MongoDB connected.")
+        else:
+            print("⚠️  MongoDB not available — history and session persistence disabled.")
+        print("✅ Groq client and embeddings initialized.")
     except Exception as e:
         print(f"⚠️  Startup warning: {e}")
     yield
@@ -82,10 +89,12 @@ app.include_router(history_router, prefix="/history", tags=["Chat History"])
 
 @app.get("/health")
 async def health_check():
+    from utils.session_store import is_available
     return {
         "status": "ok",
         "message": "AI Career & Research Assistant API is running",
-        "version": "1.1.0",
+        "version": "1.2.0",
+        "mongodb": is_available(),
     }
 
 

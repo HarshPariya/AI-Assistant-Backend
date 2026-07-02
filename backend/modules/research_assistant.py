@@ -7,9 +7,10 @@ import uuid
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from pydantic import BaseModel
 from typing import Optional
-from utils.llm import system_user_chat, chat_completion, get_model
+from utils.llm import async_system_user_chat, get_model
 from utils.pdf_loader import extract_text_from_pdf, extract_text_with_pages, chunk_pages
-from utils.embeddings import build_and_save_vector_store, similarity_search
+from utils.embeddings import async_build_and_save_vector_store, async_similarity_search
+from utils.session_store import save_session_data, load_session_data
 
 router = APIRouter()
 
@@ -95,8 +96,9 @@ async def upload_research_pdfs(files: list[UploadFile] = File(...)):
     if not all_chunks:
         raise HTTPException(status_code=400, detail="No readable text found in uploaded PDFs.")
 
-    total_chunks = build_and_save_vector_store(session_id, all_chunks)
+    total_chunks = await async_build_and_save_vector_store(session_id, all_chunks)
     research_sessions[session_id] = documents
+    save_session_data(session_id, "research", documents)
 
     return ResearchSession(
         session_id=session_id,
@@ -110,72 +112,73 @@ async def perform_research_action(req: ResearchActionRequest):
     """Perform a research action (summarize, compare, notes, takeaways, ask)."""
     documents = research_sessions.get(req.session_id)
     if not documents:
+        documents = load_session_data(req.session_id)
+        if documents:
+            research_sessions[req.session_id] = documents
+    if not documents:
         raise HTTPException(status_code=404, detail="Session not found. Upload PDFs first.")
 
-    store_path = os.path.join(os.getenv("VECTOR_STORE_DIR", "vector_store"), f"{req.session_id}.pkl")
-    if not os.path.exists(store_path):
-        raise HTTPException(status_code=400, detail="Session expired due to server sleep. Please re-upload your PDFs.")
+    from utils.embeddings import _load_store
+    if _load_store(req.session_id) is None:
+        raise HTTPException(status_code=400, detail="Session expired due to server restart. Please re-upload your PDFs.")
 
     doc_names = [d["filename"] for d in documents]
 
     if req.action == "ask" and req.query:
-        try:
-            chunks = similarity_search(req.session_id, req.query, top_k=5)
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Session expired due to server sleep. Please re-upload your PDFs.")
+        chunks = await async_similarity_search(req.session_id, req.query, top_k=5)
         context = "\n\n".join([f"[{c['doc_name']} - Page {c['page']}]: {c['text']}" for c in chunks])
 
-        result = system_user_chat(
+        result = await async_system_user_chat(
             system_prompt=RESEARCH_SYSTEM,
-            user_message=f"Documents: {', '.join(doc_names)}\n\nContext:\n{context[:8000]}\n\nQuestion: {req.query}",
+            user_message=f"Documents: {', '.join(doc_names)}\n\nContext:\n{context[:6000]}\n\nQuestion: {req.query}",
             temperature=0.3,
-            max_tokens=900,
+            max_tokens=700,
         )
 
     elif req.action == "summarize_all":
         all_context = []
         for doc in documents:
-            chunks = similarity_search(req.session_id, f"main topics overview introduction conclusion {doc['filename']}", top_k=2)
+            chunks = await async_similarity_search(req.session_id, f"main topics overview introduction conclusion {doc['filename']}", top_k=2)
             for c in chunks:
                 if c.get("doc_id") == doc["doc_id"]:
                     all_context.append(f"[{doc['filename']}]: {c['text']}")
 
         context = "\n\n".join(all_context[:8])
-        result = system_user_chat(
+        result = await async_system_user_chat(
             system_prompt=RESEARCH_SYSTEM,
-            user_message=f"Summarize these research documents:\nDocuments: {', '.join(doc_names)}\n\nContent samples:\n{context[:8000]}\n\nProvide a structured summary for each document (1-2 paragraphs each) followed by a brief overall synthesis.",
+            user_message=f"Summarize these research documents:\nDocuments: {', '.join(doc_names)}\n\nContent samples:\n{context[:6000]}\n\nProvide a structured summary for each document (1-2 paragraphs each) followed by a brief overall synthesis.",
             temperature=0.4,
-            max_tokens=1000,
+            max_tokens=800,
         )
 
     elif req.action == "compare":
-        chunks = similarity_search(req.session_id, "methodology findings results conclusions comparison", top_k=6)
+        chunks = await async_similarity_search(req.session_id, "methodology findings results conclusions comparison", top_k=6)
         context = "\n\n".join([f"[{c.get('doc_name', 'Doc')} - Page {c['page']}]: {c['text']}" for c in chunks])
-        result = system_user_chat(
+        result = await async_system_user_chat(
             system_prompt=RESEARCH_SYSTEM,
-            user_message=f"Compare these documents: {', '.join(doc_names)}\n\nContent:\n{context[:8000]}\n\nCreate a comparison covering: methodology, findings, conclusions, similarities, and differences. Use headers.",
+            user_message=f"Compare these documents: {', '.join(doc_names)}\n\nContent:\n{context[:6000]}\n\nCreate a comparison covering: methodology, findings, conclusions, similarities, and differences. Use headers.",
             temperature=0.4,
-            max_tokens=1000,
+            max_tokens=800,
         )
 
     elif req.action == "study_notes":
-        chunks = similarity_search(req.session_id, "key concepts definitions important terms methodology", top_k=8)
+        chunks = await async_similarity_search(req.session_id, "key concepts definitions important terms methodology", top_k=8)
         context = "\n\n".join([f"[{c.get('doc_name', 'Doc')} - Page {c['page']}]: {c['text']}" for c in chunks])
-        result = system_user_chat(
+        result = await async_system_user_chat(
             system_prompt=RESEARCH_SYSTEM,
-            user_message=f"Create study notes from: {', '.join(doc_names)}\n\nContent:\n{context[:8000]}\n\nFormat as: Key Concepts, Important Definitions, Main Arguments, Critical Points.",
+            user_message=f"Create study notes from: {', '.join(doc_names)}\n\nContent:\n{context[:6000]}\n\nFormat as: Key Concepts, Important Definitions, Main Arguments, Critical Points.",
             temperature=0.4,
-            max_tokens=1000,
+            max_tokens=800,
         )
 
     elif req.action == "key_takeaways":
-        chunks = similarity_search(req.session_id, "conclusion findings results implications", top_k=6)
+        chunks = await async_similarity_search(req.session_id, "conclusion findings results implications", top_k=6)
         context = "\n\n".join([f"[{c.get('doc_name', 'Doc')} - Page {c['page']}]: {c['text']}" for c in chunks])
-        result = system_user_chat(
+        result = await async_system_user_chat(
             system_prompt=RESEARCH_SYSTEM,
-            user_message=f"Extract key takeaways from: {', '.join(doc_names)}\n\nContent:\n{context[:8000]}\n\nList the 10 most important takeaways in bullet points, organized by theme.",
+            user_message=f"Extract key takeaways from: {', '.join(doc_names)}\n\nContent:\n{context[:6000]}\n\nList the 10 most important takeaways in bullet points, organized by theme.",
             temperature=0.3,
-            max_tokens=900,
+            max_tokens=700,
         )
 
     else:

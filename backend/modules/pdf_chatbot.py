@@ -6,9 +6,10 @@ import os
 import uuid
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from pydantic import BaseModel
-from utils.llm import chat_completion, get_model
+from utils.llm import async_chat_completion, async_system_user_chat, get_model
 from utils.pdf_loader import extract_text_with_pages, chunk_pages
-from utils.embeddings import build_and_save_vector_store, similarity_search
+from utils.embeddings import async_build_and_save_vector_store, async_similarity_search
+from utils.session_store import save_session_data, load_session_data
 
 router = APIRouter()
 
@@ -67,10 +68,11 @@ async def upload_pdf(file: UploadFile = File(...)):
             raise HTTPException(status_code=400, detail="No text found in the PDF.")
 
         chunks = chunk_pages(pages)
-        chunk_count = build_and_save_vector_store(session_id, chunks)
+        chunk_count = await async_build_and_save_vector_store(session_id, chunks)
 
         # Initialize chat session
         chat_sessions[session_id] = []
+        save_session_data(session_id, "chatbot", {"filename": file.filename, "chunk_count": chunk_count})
 
         return UploadResponse(
             session_id=session_id,
@@ -86,15 +88,16 @@ async def upload_pdf(file: UploadFile = File(...)):
 @router.post("/ask", response_model=ChatResponse)
 async def ask_question(req: ChatRequest):
     """Ask a question about the uploaded PDF using RAG."""
-    try:
-        relevant_chunks = similarity_search(req.session_id, req.message, top_k=4)
-    except ValueError:
-        raise HTTPException(
-            status_code=400,
-            detail="Session expired due to server sleep. Please re-upload your document."
-        )
+    relevant_chunks = await async_similarity_search(req.session_id, req.message, top_k=4)
 
     if not relevant_chunks:
+        # Try restoring session metadata from MongoDB
+        meta = load_session_data(req.session_id)
+        if meta:
+            raise HTTPException(
+                status_code=400,
+                detail="Session expired due to server restart. Please re-upload your document."
+            )
         raise HTTPException(
             status_code=404,
             detail="No documents found for this session. Please upload a PDF first."
@@ -129,11 +132,11 @@ async def ask_question(req: ChatRequest):
         "content": f"Context from the document:\n{context[:6000]}\n\nQuestion: {req.message}"
     })
 
-    answer = chat_completion(
+    answer = await async_chat_completion(
         messages=messages,
         model=get_model(),
         temperature=0.3,
-        max_tokens=800,  # Reduced from 1024
+        max_tokens=800,
     )
 
     # Update session history
@@ -143,6 +146,7 @@ async def ask_question(req: ChatRequest):
         "question": req.message,
         "answer": answer,
     })
+    save_session_data(req.session_id, "chatbot_history", chat_sessions[req.session_id])
 
     return ChatResponse(
         answer=answer,

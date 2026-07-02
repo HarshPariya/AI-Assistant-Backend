@@ -5,7 +5,7 @@ Role-based interview question generation and mock interview mode
 import json
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from utils.llm import chat_completion, system_user_chat
+from utils.llm import async_system_user_chat
 
 router = APIRouter()
 
@@ -91,11 +91,11 @@ Return JSON:
 }}"""
 
     try:
-        response = system_user_chat(
+        response = await async_system_user_chat(
             system_prompt=INTERVIEW_SYSTEM,
             user_message=prompt,
             temperature=0.7,
-            max_tokens=1800,  # Reduced from 3000
+            max_tokens=1500,
         )
         cleaned = response.strip()
         if cleaned.startswith("```"):
@@ -139,11 +139,11 @@ Evaluate and return JSON:
 }}"""
 
     try:
-        response = system_user_chat(
+        response = await async_system_user_chat(
             system_prompt=EVAL_SYSTEM,
             user_message=prompt,
             temperature=0.4,
-            max_tokens=800,  # Reduced from 1500
+            max_tokens=700,
         )
         cleaned = response.strip()
         if cleaned.startswith("```"):
@@ -165,11 +165,11 @@ async def generate_model_answer(role: str, question: str):
     prompt = f"Role: {role}\nQuestion: {question}\n\nProvide a comprehensive, structured model answer (1-2 paragraphs) that a senior candidate would give. Include specific examples and technical details."
 
     try:
-        response = system_user_chat(
+        response = await async_system_user_chat(
             system_prompt="You are an expert technical interviewer. Provide exemplary interview answers.",
             user_message=prompt,
             temperature=0.5,
-            max_tokens=600,  # Reduced from 800
+            max_tokens=500,
         )
         return {"answer": response}
     except Exception as e:

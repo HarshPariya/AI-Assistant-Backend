@@ -9,10 +9,6 @@ python-multipart==0.0.18
 # Groq API (LLM + Vision)
 groq==0.13.1
 
-# LangChain ecosystem
-langchain==0.3.13
-langchain-groq==0.2.3
-langchain-community==0.3.13
 
 # Embeddings (pure Python - works on all Python versions)
 --extra-index-url https://download.pytorch.org/whl/cpu

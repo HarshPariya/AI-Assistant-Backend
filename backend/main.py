@@ -30,7 +30,7 @@ from modules.research_assistant import router as research_router
 from modules.image_captioning import router as vision_router
 from modules.general_chat import router as general_chat_router
 from modules.history import router as history_router, init_db
-
+from modules.voice import router as voice_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -88,6 +88,7 @@ app.include_router(research_router, prefix="/research", tags=["Research Assistan
 app.include_router(vision_router, prefix="/vision", tags=["Image Captioning"])
 app.include_router(general_chat_router, prefix="/general", tags=["General Chat"])
 app.include_router(history_router, prefix="/history", tags=["Chat History"])
+app.include_router(voice_router, prefix="/voice", tags=["Voice AI"])
 
 
 @app.get("/health")

@@ -50,11 +50,13 @@ def chat_completion(
     messages: list[dict],
     model: str | None = None,
     temperature: float = 0.7,
-    max_tokens: int = 1024,  # Reduced default for speed (was 4096)
+    max_tokens: int = 1024,
+    tools: list[dict] | None = None,
+    tool_choice: str | dict = "auto",
 ) -> str:
     """
     Run a chat completion with Groq with robust retry logic.
-    Uses linear backoff to avoid blocking the event loop excessively.
+    Handles tool calls seamlessly via recursion.
     """
     client = get_groq_client()
     selected_model = model or get_model()
@@ -64,13 +66,62 @@ def chat_completion(
 
     for attempt in range(max_retries):
         try:
-            response = client.chat.completions.create(
-                model=selected_model,
-                messages=messages,
-                temperature=temperature,
-                max_tokens=max_tokens,
-            )
-            return response.choices[0].message.content
+            kwargs = {
+                "model": selected_model,
+                "messages": messages,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+            }
+            if tools:
+                kwargs["tools"] = tools
+                kwargs["tool_choice"] = tool_choice
+
+            response = client.chat.completions.create(**kwargs)
+            message = response.choices[0].message
+            
+            # Handle tool calls if the model requests them
+            if message.tool_calls:
+                # Add the model's tool call message to the context manually to avoid None fields
+                assistant_msg = {
+                    "role": "assistant",
+                    "content": message.content,
+                    "tool_calls": [
+                        {
+                            "id": tc.id,
+                            "type": tc.type,
+                            "function": {
+                                "name": tc.function.name,
+                                "arguments": tc.function.arguments
+                            }
+                        } for tc in message.tool_calls
+                    ]
+                }
+                messages.append(assistant_msg)
+                
+                # Import search_web here to avoid circular imports if any
+                from utils.tools import search_web
+                
+                for tool_call in message.tool_calls:
+                    if tool_call.function.name == "search_web":
+                        import json
+                        args = json.loads(tool_call.function.arguments)
+                        query = args.get("query", "")
+                        
+                        # Execute the tool
+                        result = search_web(query)
+                        
+                        # Append the result
+                        messages.append({
+                            "tool_call_id": tool_call.id,
+                            "role": "tool",
+                            "name": "search_web",
+                            "content": result,
+                        })
+                
+                # Recurse to get the final answer after tool execution
+                return chat_completion(messages, model, temperature, max_tokens, tools, tool_choice)
+
+            return message.content
         except Exception as e:
             last_error = e
             error_str = str(e).lower()
@@ -80,9 +131,9 @@ def chat_completion(
                 raise
 
             if attempt < max_retries - 1:
-                # Short linear backoff: 1s, 2s — don't wait too long
                 sleep_time = attempt + 1
                 print(f"Groq API Error (attempt {attempt + 1}): {str(e)}. Retrying in {sleep_time}s...")
+                import time
                 time.sleep(sleep_time)
             else:
                 print(f"Groq API Error after {max_retries} attempts: {str(e)}")
@@ -109,10 +160,12 @@ async def async_chat_completion(
     model: str | None = None,
     temperature: float = 0.7,
     max_tokens: int = 1024,
+    tools: list[dict] | None = None,
+    tool_choice: str | dict = "auto",
 ) -> str:
     """Non-blocking wrapper — runs sync Groq call in a thread pool."""
     return await asyncio.to_thread(
-        chat_completion, messages, model, temperature, max_tokens
+        chat_completion, messages, model, temperature, max_tokens, tools, tool_choice
     )
 
 

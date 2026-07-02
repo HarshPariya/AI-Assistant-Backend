@@ -205,6 +205,23 @@ async def general_chat(
     # 4. Call Groq — lower max_tokens for text, higher for vision analysis
     is_vision = model_to_use == get_vision_model()
     max_tok = 1024 if not is_vision else 800
+    
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "search_web",
+                "description": "Search the web for real-time information or current events. Call this whenever you need up-to-date facts.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "The search query."}
+                    },
+                    "required": ["query"],
+                },
+            },
+        }
+    ]
 
     try:
         answer = await async_chat_completion(
@@ -212,6 +229,7 @@ async def general_chat(
             model=model_to_use,
             temperature=0.7,
             max_tokens=max_tok,
+            tools=tools if not is_vision else None,
         )
         return ChatResponse(answer=_fix_pollinations_urls(answer))
 

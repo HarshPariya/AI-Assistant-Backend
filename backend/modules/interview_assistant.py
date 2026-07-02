@@ -2,11 +2,10 @@
 Module 2: Interview Assistant
 Role-based interview question generation and mock interview mode
 """
-import json
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from utils.llm import async_system_user_chat
-from utils.json_helpers import async_json_system_user_chat
+from utils.llm import async_system_user_chat, get_chat_model
+from langchain_core.prompts import ChatPromptTemplate
 
 router = APIRouter()
 
@@ -31,6 +30,20 @@ class GenerateRequest(BaseModel):
     focus_areas: list[str] = []
 
 
+class InterviewQuestion(BaseModel):
+    id: int
+    question: str
+    category: str
+    difficulty: str
+    expected_time: str
+    hint: str
+    model_answer: str
+
+
+class QuestionListResponse(BaseModel):
+    questions: list[InterviewQuestion]
+
+
 class QuestionResponse(BaseModel):
     questions: list[dict]
     role: str
@@ -53,12 +66,10 @@ class MockInterviewResponse(BaseModel):
 
 
 INTERVIEW_SYSTEM = """You are an expert technical interviewer with 15+ years of experience at top tech companies.
-Generate interview questions and evaluate answers professionally.
-Return ONLY valid JSON as specified."""
+Generate interview questions and evaluate answers professionally."""
 
 EVAL_SYSTEM = """You are a senior technical interviewer evaluating a candidate's answer.
-Provide constructive, specific feedback. Be fair but rigorous.
-Return ONLY valid JSON."""
+Provide constructive, specific feedback. Be fair but rigorous."""
 
 
 @router.get("/roles")
@@ -74,43 +85,31 @@ async def generate_questions(req: GenerateRequest):
     num_q = min(req.num_questions, 10)
     focus = f" Focus on: {', '.join(req.focus_areas)}." if req.focus_areas else ""
 
-    prompt = f"""Generate {num_q} interview questions for a {req.experience_level}-level {req.role} position.{focus}
-
-Return JSON:
-{{
-  "questions": [
-    {{
-      "id": 1,
-      "question": "<question text>",
-      "category": "<Technical|Behavioral|System Design|Problem Solving>",
-      "difficulty": "<Easy|Medium|Hard>",
-      "expected_time": "<2-3 minutes>",
-      "hint": "<brief hint>",
-      "model_answer": "<exemplary answer in 2-3 sentences>"
-    }}
-  ]
-}}"""
+    user_msg = f"Generate {num_q} interview questions for a {req.experience_level}-level {req.role} position.{focus}"
 
     try:
-        data = await async_json_system_user_chat(
-            system_prompt=INTERVIEW_SYSTEM,
-            user_message=prompt,
-            temperature=0.7,
-            max_tokens=3000,
-            max_retries=3,
-        )
-        questions = data.get("questions", [])
-        if not questions:
+        chat_model = get_chat_model(temperature=0.7, max_tokens=3000)
+        structured_llm = chat_model.with_structured_output(QuestionListResponse)
+        
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", INTERVIEW_SYSTEM),
+            ("user", "{user_msg}")
+        ])
+        
+        chain = prompt | structured_llm
+        result = await chain.ainvoke({"user_msg": user_msg})
+        
+        # Convert Pydantic models to dicts for backward compatibility with frontend
+        questions_dicts = [q.model_dump() for q in result.questions]
+        
+        if not questions_dicts:
             raise ValueError("No questions returned by the model")
+            
         return QuestionResponse(
-            questions=questions,
+            questions=questions_dicts,
             role=req.role,
-            total=len(questions),
+            total=len(questions_dicts),
         )
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=500, detail="Failed to parse AI response as JSON. Please try again.")
-    except (KeyError, ValueError) as e:
-        raise HTTPException(status_code=500, detail=f"Invalid AI response format: {e}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -125,30 +124,22 @@ async def evaluate_mock_answer(req: MockInterviewRequest):
              for h in req.conversation_history[-2:]]  # Reduced to last 2 for speed
         )
 
-    prompt = f"""Role: {req.role}
+    user_msg = f"""Role: {req.role}
 Question asked: {req.question}
-Candidate's answer: {req.user_answer}{history_text}
-
-Evaluate and return JSON:
-{{
-  "evaluation": "<detailed constructive feedback>",
-  "score": <0-100>,
-  "follow_up_question": "<relevant follow-up question>",
-  "tips": ["<tip1>", "<tip2>", "<tip3>"],
-  "model_answer_hint": "<brief hint on what a strong answer would include>"
-}}"""
+Candidate's answer: {req.user_answer}{history_text}"""
 
     try:
-        data = await async_json_system_user_chat(
-            system_prompt=EVAL_SYSTEM,
-            user_message=prompt,
-            temperature=0.4,
-            max_tokens=900,
-            max_retries=3,
-        )
-        return MockInterviewResponse(**data)
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=500, detail="Failed to parse AI response. Please try again.")
+        chat_model = get_chat_model(temperature=0.4, max_tokens=900)
+        structured_llm = chat_model.with_structured_output(MockInterviewResponse)
+        
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", EVAL_SYSTEM),
+            ("user", "{user_msg}")
+        ])
+        
+        chain = prompt | structured_llm
+        result = await chain.ainvoke({"user_msg": user_msg})
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

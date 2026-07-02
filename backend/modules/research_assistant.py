@@ -124,15 +124,28 @@ async def perform_research_action(req: ResearchActionRequest):
 
     doc_names = [d["filename"] for d in documents]
 
+    from utils.llm import get_chat_model
+    from langchain_core.prompts import ChatPromptTemplate
+    
+    async def _run_langchain_chat(sys_msg: str, user_msg: str, temp: float, max_tok: int) -> str:
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", sys_msg),
+            ("user", "{user_msg}")
+        ])
+        chat_model = get_chat_model(temperature=temp, max_tokens=max_tok)
+        chain = prompt | chat_model
+        res = await chain.ainvoke({"user_msg": user_msg})
+        return res.content
+
     if req.action == "ask" and req.query:
         chunks = await async_similarity_search(req.session_id, req.query, top_k=5)
         context = "\n\n".join([f"[{c['doc_name']} - Page {c['page']}]: {c['text']}" for c in chunks])
 
-        result = await async_system_user_chat(
-            system_prompt=RESEARCH_SYSTEM,
-            user_message=f"Documents: {', '.join(doc_names)}\n\nContext:\n{context[:6000]}\n\nQuestion: {req.query}",
-            temperature=0.3,
-            max_tokens=700,
+        result = await _run_langchain_chat(
+            sys_msg=RESEARCH_SYSTEM,
+            user_msg=f"Documents: {', '.join(doc_names)}\n\nContext:\n{context[:6000]}\n\nQuestion: {req.query}",
+            temp=0.3,
+            max_tok=700,
         )
 
     elif req.action == "summarize_all":
@@ -144,41 +157,41 @@ async def perform_research_action(req: ResearchActionRequest):
                     all_context.append(f"[{doc['filename']}]: {c['text']}")
 
         context = "\n\n".join(all_context[:8])
-        result = await async_system_user_chat(
-            system_prompt=RESEARCH_SYSTEM,
-            user_message=f"Summarize these research documents:\nDocuments: {', '.join(doc_names)}\n\nContent samples:\n{context[:6000]}\n\nProvide a structured summary for each document (1-2 paragraphs each) followed by a brief overall synthesis.",
-            temperature=0.4,
-            max_tokens=800,
+        result = await _run_langchain_chat(
+            sys_msg=RESEARCH_SYSTEM,
+            user_msg=f"Summarize these research documents:\nDocuments: {', '.join(doc_names)}\n\nContent samples:\n{context[:6000]}\n\nProvide a structured summary for each document (1-2 paragraphs each) followed by a brief overall synthesis.",
+            temp=0.4,
+            max_tok=800,
         )
 
     elif req.action == "compare":
         chunks = await async_similarity_search(req.session_id, "methodology findings results conclusions comparison", top_k=6)
         context = "\n\n".join([f"[{c.get('doc_name', 'Doc')} - Page {c['page']}]: {c['text']}" for c in chunks])
-        result = await async_system_user_chat(
-            system_prompt=RESEARCH_SYSTEM,
-            user_message=f"Compare these documents: {', '.join(doc_names)}\n\nContent:\n{context[:6000]}\n\nCreate a comparison covering: methodology, findings, conclusions, similarities, and differences. Use headers.",
-            temperature=0.4,
-            max_tokens=800,
+        result = await _run_langchain_chat(
+            sys_msg=RESEARCH_SYSTEM,
+            user_msg=f"Compare these documents: {', '.join(doc_names)}\n\nContent:\n{context[:6000]}\n\nCreate a comparison covering: methodology, findings, conclusions, similarities, and differences. Use headers.",
+            temp=0.4,
+            max_tok=800,
         )
 
     elif req.action == "study_notes":
         chunks = await async_similarity_search(req.session_id, "key concepts definitions important terms methodology", top_k=8)
         context = "\n\n".join([f"[{c.get('doc_name', 'Doc')} - Page {c['page']}]: {c['text']}" for c in chunks])
-        result = await async_system_user_chat(
-            system_prompt=RESEARCH_SYSTEM,
-            user_message=f"Create study notes from: {', '.join(doc_names)}\n\nContent:\n{context[:6000]}\n\nFormat as: Key Concepts, Important Definitions, Main Arguments, Critical Points.",
-            temperature=0.4,
-            max_tokens=800,
+        result = await _run_langchain_chat(
+            sys_msg=RESEARCH_SYSTEM,
+            user_msg=f"Create study notes from: {', '.join(doc_names)}\n\nContent:\n{context[:6000]}\n\nFormat as: Key Concepts, Important Definitions, Main Arguments, Critical Points.",
+            temp=0.4,
+            max_tok=800,
         )
 
     elif req.action == "key_takeaways":
         chunks = await async_similarity_search(req.session_id, "conclusion findings results implications", top_k=6)
         context = "\n\n".join([f"[{c.get('doc_name', 'Doc')} - Page {c['page']}]: {c['text']}" for c in chunks])
-        result = await async_system_user_chat(
-            system_prompt=RESEARCH_SYSTEM,
-            user_message=f"Extract key takeaways from: {', '.join(doc_names)}\n\nContent:\n{context[:6000]}\n\nList the 10 most important takeaways in bullet points, organized by theme.",
-            temperature=0.3,
-            max_tokens=700,
+        result = await _run_langchain_chat(
+            sys_msg=RESEARCH_SYSTEM,
+            user_msg=f"Extract key takeaways from: {', '.join(doc_names)}\n\nContent:\n{context[:6000]}\n\nList the 10 most important takeaways in bullet points, organized by theme.",
+            temp=0.3,
+            max_tok=700,
         )
 
     else:

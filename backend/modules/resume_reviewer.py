@@ -81,19 +81,28 @@ async def analyze_resume(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail="PDF appears to be empty or unreadable.")
 
     try:
-        analysis = await async_json_system_user_chat(
-            system_prompt=RESUME_SYSTEM_PROMPT,
-            user_message=f"Analyze this resume:\n\n{resume_text[:5000]}",
-            temperature=0.3,
-            max_tokens=2500,
-            max_retries=3,
-        )
-        return ResumeAnalysis(**analysis)
+        from utils.llm import get_chat_model
+        from langchain_core.prompts import ChatPromptTemplate
 
-    except json.JSONDecodeError:
-        raise HTTPException(
-            status_code=500,
-            detail="Failed to parse AI response. Please try again.",
-        )
+        chat_model = get_chat_model(temperature=0.3, max_tokens=2500)
+        structured_llm = chat_model.with_structured_output(ResumeAnalysis)
+
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", RESUME_SYSTEM_PROMPT),
+            ("user", "Analyze this resume:\n\n{resume_text}")
+        ])
+
+        chain = prompt | structured_llm
+        analysis = await chain.ainvoke({"resume_text": resume_text[:5000]})
+        
+        return analysis
+
     except Exception as e:
+        import traceback
+        try:
+            with open("backend_error.log", "a") as f:
+                f.write(f"\n--- ERROR ---\n")
+                traceback.print_exc(file=f)
+        except Exception:
+            pass
         raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")

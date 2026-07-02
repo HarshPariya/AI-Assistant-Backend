@@ -173,7 +173,7 @@ async def general_chat(
                 # Switch to vision model
                 model_to_use = get_vision_model()
 
-                # Groq vision payload format
+                # Groq vision payload format (LangChain can handle this if passed correctly as HumanMessage)
                 user_text = last_msg.content or "Describe this image in detail."
                 api_messages.append({
                     "role": last_msg.role,
@@ -207,13 +207,48 @@ async def general_chat(
     max_tok = 1024 if not is_vision else 800
 
     try:
-        answer = await async_chat_completion(
-            messages=api_messages,
-            model=model_to_use,
-            temperature=0.7,
-            max_tokens=max_tok,
-        )
-        return ChatResponse(answer=_fix_pollinations_urls(answer))
+        from utils.llm import get_chat_model, _convert_to_langchain_messages
+        
+        if is_vision:
+            # For vision, use the raw async_chat_completion wrapper which converts to LangChain internally
+            answer = await async_chat_completion(
+                messages=api_messages,
+                model=model_to_use,
+                temperature=0.7,
+                max_tokens=max_tok,
+            )
+            return ChatResponse(answer=_fix_pollinations_urls(answer))
+        else:
+            # Build LangChain Agent with Web Search Tool!
+            from langchain.agents import AgentExecutor, create_tool_calling_agent
+            from langchain_community.tools import DuckDuckGoSearchRun
+            from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+            
+            chat_model = get_chat_model(model=model_to_use, max_tokens=max_tok)
+            tools = [DuckDuckGoSearchRun(name="web_search", description="Search the live internet for recent news, facts, and information.")]
+            
+            prompt = ChatPromptTemplate.from_messages([
+                ("system", SYSTEM_PROMPT + "\nYou have access to a web_search tool. Use it if you need live information or don't know the answer."),
+                MessagesPlaceholder(variable_name="chat_history"),
+                ("user", "{input}"),
+                MessagesPlaceholder(variable_name="agent_scratchpad"),
+            ])
+            
+            agent = create_tool_calling_agent(chat_model, tools, prompt)
+            agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=True)
+            
+            # Extract history (everything except the last user message and the system prompt)
+            lc_history = _convert_to_langchain_messages(api_messages[1:-1])
+            last_input = api_messages[-1]["content"]
+            
+            # Run the agent! (Using ainvoke for async)
+            result = await agent_executor.ainvoke({
+                "input": last_input,
+                "chat_history": lc_history
+            })
+            
+            answer = result["output"]
+            return ChatResponse(answer=_fix_pollinations_urls(answer))
 
     except Exception as e:
         import traceback

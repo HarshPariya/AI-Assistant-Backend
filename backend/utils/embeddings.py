@@ -1,5 +1,7 @@
 """
-Embeddings Utility — Refactored to use LangChain (FAISS + HuggingFaceEmbeddings)
+Embeddings Utility — Sentence Transformers + Pure NumPy Vector Store
+Uses cosine similarity with numpy + pickle for persistence.
+MongoDB fallback for Render/ephemeral deployments.
 """
 import asyncio
 import os
@@ -9,53 +11,68 @@ os.environ["USE_TF"] = "0"
 os.environ["USE_TORCH"] = "1"
 os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
 
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_community.vectorstores import FAISS
+import pickle
+import numpy as np
+from sentence_transformers import SentenceTransformer
+from sklearn.metrics.pairwise import cosine_similarity
 
 from utils.session_store import save_vector_store, load_vector_store
 
 VECTOR_STORE_DIR = os.getenv("VECTOR_STORE_DIR", "vector_store")
 
-_embeddings: HuggingFaceEmbeddings | None = None
+_embedding_model: SentenceTransformer | None = None
 
-def get_embeddings() -> HuggingFaceEmbeddings:
-    """Get or create the LangChain HuggingFaceEmbeddings."""
-    global _embeddings
-    if _embeddings is None:
-        _embeddings = HuggingFaceEmbeddings(
-            model_name="all-MiniLM-L6-v2",
-            model_kwargs={'device': 'cpu'},
-            encode_kwargs={'normalize_embeddings': True}
-        )
-    return _embeddings
+
+def get_embedding_model() -> SentenceTransformer:
+    """Get or create the sentence transformer model."""
+    global _embedding_model
+    if _embedding_model is None:
+        _embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+    return _embedding_model
 
 
 def preload_embedding_model() -> None:
-    """Warm up the embedding model on startup."""
-    get_embeddings()
+    """Warm up the embedding model on startup to avoid first-request delay."""
+    get_embedding_model()
+
+
+def embed_texts(texts: list[str]) -> np.ndarray:
+    """Embed a list of texts into normalized vectors."""
+    model = get_embedding_model()
+    embeddings = model.encode(texts, normalize_embeddings=True, show_progress_bar=False, batch_size=64)
+    return np.array(embeddings, dtype="float32")
+
+
+async def async_embed_texts(texts: list[str]) -> np.ndarray:
+    """Non-blocking embedding."""
+    return await asyncio.to_thread(embed_texts, texts)
+
+
+def _load_store(session_id: str) -> dict | None:
+    """Load vector store from disk or MongoDB."""
+    store_path = os.path.join(VECTOR_STORE_DIR, f"{session_id}.pkl")
+    if os.path.exists(store_path):
+        with open(store_path, "rb") as f:
+            return pickle.load(f)
+    return load_vector_store(session_id)
 
 
 def build_and_save_vector_store(session_id: str, chunks: list[dict]) -> int:
-    """Embed chunks using FAISS and save to disk + MongoDB."""
+    """Embed chunks, compute embeddings, and save to disk + MongoDB. Returns chunk count."""
     os.makedirs(VECTOR_STORE_DIR, exist_ok=True)
-    embeddings = get_embeddings()
-    
     texts = [c["text"] for c in chunks]
-    metadatas = [{"page": c.get("page", 1)} for c in chunks]
-    
-    vectorstore = FAISS.from_texts(texts, embeddings, metadatas=metadatas)
-    
-    # Save to disk
-    store_path = os.path.join(VECTOR_STORE_DIR, session_id)
-    vectorstore.save_local(store_path)
-    
-    # Save to MongoDB
-    try:
-        index_bytes = vectorstore.serialize_to_bytes()
-        save_vector_store(session_id, {"faiss_bytes": index_bytes})
-    except Exception as e:
-        print(f"Failed to save FAISS to MongoDB: {e}")
-        
+    embeddings = embed_texts(texts)
+
+    store = {
+        "embeddings": embeddings,
+        "chunks": chunks,
+    }
+
+    store_path = os.path.join(VECTOR_STORE_DIR, f"{session_id}.pkl")
+    with open(store_path, "wb") as f:
+        pickle.dump(store, f)
+
+    save_vector_store(session_id, store)
     return len(chunks)
 
 
@@ -65,36 +82,25 @@ async def async_build_and_save_vector_store(session_id: str, chunks: list[dict])
 
 
 def similarity_search(session_id: str, query: str, top_k: int = 5) -> list[dict]:
-    """Search using FAISS."""
-    store_path = os.path.join(VECTOR_STORE_DIR, session_id)
-    embeddings = get_embeddings()
-    vectorstore = None
-    
-    if os.path.exists(store_path):
-        vectorstore = FAISS.load_local(store_path, embeddings, allow_dangerous_deserialization=True)
-    else:
-        # Fallback to MongoDB
-        data = load_vector_store(session_id)
-        if data and "faiss_bytes" in data:
-            vectorstore = FAISS.deserialize_from_bytes(data["faiss_bytes"], embeddings, allow_dangerous_deserialization=True)
-            # Re-save locally for faster access next time
-            os.makedirs(VECTOR_STORE_DIR, exist_ok=True)
-            vectorstore.save_local(store_path)
-            
-    if vectorstore is None:
+    """Search for the most relevant chunks for a query using cosine similarity."""
+    store = _load_store(session_id)
+    if store is None:
         return []
 
-    # FAISS with cosine distance (since we normalize embeddings, inner product/L2 is proportional to cosine)
-    docs_and_scores = vectorstore.similarity_search_with_score(query, k=top_k)
-    
+    embeddings = store["embeddings"]
+    chunks = store["chunks"]
+
+    query_embedding = embed_texts([query])
+    similarities = cosine_similarity(query_embedding, embeddings)[0]
+
+    top_indices = np.argsort(similarities)[::-1][:top_k]
+
     results = []
-    for doc, score in docs_and_scores:
-        # In FAISS L2, smaller score is closer. 
-        results.append({
-            "text": doc.page_content,
-            "page": doc.metadata.get("page", 1),
-            "score": float(score) 
-        })
+    for idx in top_indices:
+        if similarities[idx] > 0.1:
+            chunk = chunks[idx].copy()
+            chunk["score"] = float(similarities[idx])
+            results.append(chunk)
 
     return results
 

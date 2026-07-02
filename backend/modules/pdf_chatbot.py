@@ -136,23 +136,25 @@ async def ask_question(req: ChatRequest):
     # Build conversation history (last 3 exchanges only for speed)
     history = chat_sessions.get(req.session_id, [])
 
-    from utils.llm import get_chat_model
-    from langchain_core.prompts import ChatPromptTemplate
-    
-    lc_messages = [("system", RAG_SYSTEM)]
+    messages = [
+        {"role": "system", "content": RAG_SYSTEM},
+    ]
 
     for exchange in history[-3:]:
-        lc_messages.append(("user", exchange["question"]))
-        lc_messages.append(("assistant", exchange["answer"]))
+        messages.append({"role": "user", "content": exchange["question"]})
+        messages.append({"role": "assistant", "content": exchange["answer"]})
 
-    lc_messages.append(("user", f"Context from the document:\n{context[:6000]}\n\nQuestion: {req.message}"))
+    messages.append({
+        "role": "user",
+        "content": f"Context from the document:\n{context[:6000]}\n\nQuestion: {req.message}"
+    })
 
-    prompt = ChatPromptTemplate.from_messages(lc_messages)
-    chat_model = get_chat_model(temperature=0.3, max_tokens=800)
-    
-    chain = prompt | chat_model
-    result = await chain.ainvoke({})
-    answer = result.content
+    answer = await async_chat_completion(
+        messages=messages,
+        model=get_model(),
+        temperature=0.3,
+        max_tokens=800,
+    )
 
     # Update session history
     if req.session_id not in chat_sessions:

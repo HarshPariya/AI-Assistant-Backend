@@ -1,35 +1,38 @@
 """
 PDF Text Extraction Utility
-Uses PyMuPDF for robust text extraction with page tracking
+Uses pypdf for pure-Python robust text extraction with page tracking,
+avoiding C-extension crashes in serverless deployments.
 """
 import os
 from pathlib import Path
-import fitz  # PyMuPDF
+from pypdf import PdfReader
 
 
 def extract_text_from_pdf(file_path: str) -> str:
     """Extract all text from a PDF file."""
-    doc = fitz.open(file_path)
+    reader = PdfReader(file_path)
     text = ""
-    for page in doc:
-        text += page.get_text()
-    doc.close()
+    for page in reader.pages:
+        t = page.extract_text()
+        if t:
+            text += t + "\n"
     return text.strip()
 
 
 def extract_text_with_pages(file_path: str) -> list[dict]:
     """Extract text per page with page numbers for citation."""
-    doc = fitz.open(file_path)
+    reader = PdfReader(file_path)
     pages = []
-    for i, page in enumerate(doc):
-        text = page.get_text().strip()
+    for i, page in enumerate(reader.pages):
+        text = page.extract_text()
         if text:
-            pages.append({
-                "page": i + 1,
-                "text": text,
-                "char_count": len(text),
-            })
-    doc.close()
+            text = text.strip()
+            if text:
+                pages.append({
+                    "page": i + 1,
+                    "text": text,
+                    "char_count": len(text),
+                })
     return pages
 
 

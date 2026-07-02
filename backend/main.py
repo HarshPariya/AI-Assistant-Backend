@@ -6,14 +6,17 @@ import os
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from dotenv import load_dotenv
 
 # Force PyTorch and disable TensorFlow in transformers to avoid tf-keras Python 3.13 issues
 os.environ["USE_TF"] = "0"
 os.environ["USE_TORCH"] = "1"
 os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
+from dotenv import load_dotenv
+from pathlib import Path
 
 # Load environment variables FIRST before importing modules
+ROOT_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(ROOT_DIR / ".env")
 load_dotenv()
 
 # Create required directories

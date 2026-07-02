@@ -39,9 +39,10 @@ class ChatResponse(BaseModel):
 
 
 RAG_SYSTEM = """You are a helpful AI assistant that answers questions based on the provided document context.
-Always be accurate and cite the page numbers when referencing content.
-If the answer is not in the context, say so clearly rather than making things up.
-Be concise but thorough."""
+Always answer the user's Question directly using the document context below.
+Cite page numbers when referencing content.
+If the answer is not in the context, say you could not find it in the document.
+Never ask the user to provide a question — a question is always included after "Question:"."""
 
 
 @router.post("/upload", response_model=UploadResponse)
@@ -72,7 +73,11 @@ async def upload_pdf(file: UploadFile = File(...)):
 
         # Initialize chat session
         chat_sessions[session_id] = []
-        save_session_data(session_id, "chatbot", {"filename": file.filename, "chunk_count": chunk_count})
+        save_session_data(session_id, "chatbot", {
+            "filename": file.filename,
+            "chunk_count": chunk_count,
+            "history": [],
+        })
 
         return UploadResponse(
             session_id=session_id,
@@ -88,6 +93,18 @@ async def upload_pdf(file: UploadFile = File(...)):
 @router.post("/ask", response_model=ChatResponse)
 async def ask_question(req: ChatRequest):
     """Ask a question about the uploaded PDF using RAG."""
+    if not req.message or not req.message.strip():
+        raise HTTPException(status_code=400, detail="Please enter a question.")
+
+    if req.session_id not in chat_sessions:
+        stored = load_session_data(req.session_id)
+        if isinstance(stored, dict):
+            chat_sessions[req.session_id] = stored.get("history", [])
+        elif isinstance(stored, list):
+            chat_sessions[req.session_id] = stored
+        else:
+            chat_sessions[req.session_id] = []
+
     relevant_chunks = await async_similarity_search(req.session_id, req.message, top_k=4)
 
     if not relevant_chunks:
@@ -146,7 +163,11 @@ async def ask_question(req: ChatRequest):
         "question": req.message,
         "answer": answer,
     })
-    save_session_data(req.session_id, "chatbot_history", chat_sessions[req.session_id])
+
+    stored = load_session_data(req.session_id)
+    meta = stored if isinstance(stored, dict) else {}
+    meta["history"] = chat_sessions[req.session_id]
+    save_session_data(req.session_id, "chatbot", meta)
 
     return ChatResponse(
         answer=answer,
@@ -158,7 +179,16 @@ async def ask_question(req: ChatRequest):
 @router.get("/history/{session_id}")
 async def get_chat_history(session_id: str):
     """Get chat history for a session."""
-    history = chat_sessions.get(session_id, [])
+    history = chat_sessions.get(session_id)
+    if history is None:
+        stored = load_session_data(session_id)
+        if isinstance(stored, dict):
+            history = stored.get("history", [])
+        elif isinstance(stored, list):
+            history = stored
+        else:
+            history = []
+        chat_sessions[session_id] = history
     return {"session_id": session_id, "history": history}
 
 

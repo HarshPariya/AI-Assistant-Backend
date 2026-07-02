@@ -39,6 +39,14 @@ def is_available() -> bool:
         return False
 
 
+def get_conversations_collection():
+    """Return the conversations collection, or None if MongoDB is unavailable."""
+    db = _get_db()
+    if db is None:
+        return None
+    return db["conversations"]
+
+
 def save_vector_store(session_id: str, store: dict) -> None:
     """Persist a vector store (embeddings + chunks) to MongoDB."""
     db = _get_db()

@@ -6,6 +6,7 @@ import json
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from utils.llm import async_system_user_chat
+from utils.json_helpers import async_json_system_user_chat
 
 router = APIRouter()
 
@@ -84,33 +85,32 @@ Return JSON:
       "category": "<Technical|Behavioral|System Design|Problem Solving>",
       "difficulty": "<Easy|Medium|Hard>",
       "expected_time": "<2-3 minutes>",
-      "hint": "<brief hint for the interviewer>",
-      "model_answer": "<a detailed exemplary answer (1-2 paragraphs) a strong candidate would give>"
+      "hint": "<brief hint>",
+      "model_answer": "<exemplary answer in 2-3 sentences>"
     }}
   ]
 }}"""
 
     try:
-        response = await async_system_user_chat(
+        data = await async_json_system_user_chat(
             system_prompt=INTERVIEW_SYSTEM,
             user_message=prompt,
             temperature=0.7,
-            max_tokens=1500,
+            max_tokens=3000,
+            max_retries=3,
         )
-        cleaned = response.strip()
-        if cleaned.startswith("```"):
-            parts = cleaned.split("```")
-            cleaned = parts[1] if len(parts) > 1 else cleaned
-            if cleaned.startswith("json"):
-                cleaned = cleaned[4:]
-        data = json.loads(cleaned)
+        questions = data.get("questions", [])
+        if not questions:
+            raise ValueError("No questions returned by the model")
         return QuestionResponse(
-            questions=data["questions"],
+            questions=questions,
             role=req.role,
-            total=len(data["questions"]),
+            total=len(questions),
         )
     except json.JSONDecodeError:
         raise HTTPException(status_code=500, detail="Failed to parse AI response as JSON. Please try again.")
+    except (KeyError, ValueError) as e:
+        raise HTTPException(status_code=500, detail=f"Invalid AI response format: {e}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -139,19 +139,13 @@ Evaluate and return JSON:
 }}"""
 
     try:
-        response = await async_system_user_chat(
+        data = await async_json_system_user_chat(
             system_prompt=EVAL_SYSTEM,
             user_message=prompt,
             temperature=0.4,
-            max_tokens=700,
+            max_tokens=900,
+            max_retries=3,
         )
-        cleaned = response.strip()
-        if cleaned.startswith("```"):
-            parts = cleaned.split("```")
-            cleaned = parts[1] if len(parts) > 1 else cleaned
-            if cleaned.startswith("json"):
-                cleaned = cleaned[4:]
-        data = json.loads(cleaned)
         return MockInterviewResponse(**data)
     except json.JSONDecodeError:
         raise HTTPException(status_code=500, detail="Failed to parse AI response. Please try again.")

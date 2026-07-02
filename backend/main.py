@@ -37,8 +37,8 @@ async def lifespan(app: FastAPI):
     """Startup: warm up Groq client, embeddings, and MongoDB on boot."""
     try:
         init_db()
-        from utils.llm import get_groq_client
-        get_groq_client()
+        from utils.llm import get_chat_model
+        get_chat_model()
         from utils.embeddings import preload_embedding_model
         await asyncio.to_thread(preload_embedding_model)
         from utils.session_store import is_available

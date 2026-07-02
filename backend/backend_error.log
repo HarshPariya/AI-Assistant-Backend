@@ -146,3 +146,19 @@ Traceback (most recent call last):
   File "C:\Users\harsh\AppData\Local\Programs\Python\Python313\Lib\site-packages\groq\_base_client.py", line 1058, in _request
     raise self._make_status_error_from_response(err.response) from None
 groq.RateLimitError: Error code: 429 - {'error': {'message': 'Rate limit reached for model `llama-3.3-70b-versatile` in organization `org_01kweqzmmfet9a7pxc67taw8fk` service tier `on_demand` on tokens per day (TPD): Limit 100000, Used 99443, Requested 1348. Please try again in 11m23.424s. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing', 'type': 'tokens', 'code': 'rate_limit_exceeded'}}
+
+--- ERROR ---
+Traceback (most recent call last):
+  File "D:\AI Career & Research Assistant\backend\modules\general_chat.py", line 223, in general_chat
+    from langchain.agents import AgentExecutor, create_tool_calling_agent
+  File "C:\Users\harsh\AppData\Local\Programs\Python\Python313\Lib\site-packages\langchain\agents\__init__.py", line 40, in <module>
+    from langchain.agents.agent import (
+    ...<6 lines>...
+    )
+  File "C:\Users\harsh\AppData\Local\Programs\Python\Python313\Lib\site-packages\langchain\agents\agent.py", line 51, in <module>
+    from langchain.agents.agent_iterator import AgentExecutorIterator
+  File "C:\Users\harsh\AppData\Local\Programs\Python\Python313\Lib\site-packages\langchain\agents\agent_iterator.py", line 37, in <module>
+    from langchain.schema import RUN_KEY
+  File "C:\Users\harsh\AppData\Local\Programs\Python\Python313\Lib\site-packages\langchain\schema\__init__.py", line 8, in <module>
+    from langchain_core.memory import BaseMemory
+ModuleNotFoundError: No module named 'langchain_core.memory'

@@ -6,9 +6,21 @@ import os
 import json
 import time
 import asyncio
+import base64
+import struct
+import zlib
+import warnings
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent / "backend"))
+
+# Suppress all warnings (includes pypdf parsing warnings)
+warnings.filterwarnings("ignore")
+
+# Redirect stderr to suppress C-level pypdf warnings ("incorrect startxref pointer")
+_devnull = open(os.devnull, "w")
+_old_stderr = sys.stderr
+sys.stderr = _devnull
 
 # Load env
 from dotenv import load_dotenv
@@ -49,8 +61,7 @@ except Exception as e:
 # === 3. Test Vision API ===
 print("\n[3] Testing Groq Vision API (llama-4-scout)...")
 try:
-    import struct, zlib
-    def _make_test_png(w=10, h=10, rgb=(255, 50, 50)):
+    def _make_test_png(w=20, h=20, rgb=(255, 50, 50)):
         def chunk(name, data):
             c = name + data
             return struct.pack('>I', len(data)) + c + struct.pack('>I', zlib.crc32(c) & 0xffffffff)
@@ -62,7 +73,7 @@ try:
         iend = chunk(b'IEND', b'')
         return sig + ihdr + idat + iend
 
-    img_bytes = _make_test_png(10, 10, (255, 50, 50))
+    img_bytes = _make_test_png(20, 20, (255, 50, 50))
     img_b64 = base64.b64encode(img_bytes).decode("utf-8")
     response = client.chat.completions.create(
         model="meta-llama/llama-4-scout-17b-16e-instruct",
@@ -84,7 +95,7 @@ except Exception as e:
 # === 4. Test PDF Loading ===
 print("\n[4] Testing PDF Loading...")
 try:
-    from utils.pdf_loader import extract_text_from_pdf, extract_text_with_pages, chunk_pages
+    from backend.utils.pdf_loader import extract_text_from_pdf, extract_text_with_pages, chunk_pages
     test_pdf = str(Path(__file__).parent / "test_dummy.pdf")
     if os.path.exists(test_pdf):
         text = extract_text_from_pdf(test_pdf)
@@ -99,7 +110,7 @@ except Exception as e:
 # === 5. Test Embeddings ===
 print("\n[5] Testing Embedding Model...")
 try:
-    from utils.embeddings import get_embedding_model, embed_texts
+    from backend.utils.embeddings import get_embedding_model, embed_texts
     model = get_embedding_model()
     embeddings = embed_texts(["Hello world", "Test sentence for embeddings"])
     print(f"  Embedding Model:     ✅ OK (shape: {embeddings.shape}, model: all-MiniLM-L6-v2)")
@@ -109,7 +120,7 @@ except Exception as e:
 # === 6. Test MongoDB Connection ===
 print("\n[6] Testing MongoDB Connection...")
 try:
-    from utils.session_store import is_available
+    from backend.utils.session_store import is_available
     avail = is_available()
     print(f"  MongoDB:             {'✅ Connected' if avail else '⚠️  Not available (sessions will use local storage)'}")
 except Exception as e:
@@ -118,7 +129,7 @@ except Exception as e:
 # === 7. Test JSON Helpers ===
 print("\n[7] Testing JSON Helpers (Interview/Resume modules)...")
 try:
-    from utils.json_helpers import async_json_system_user_chat
+    from backend.utils.json_helpers import async_json_system_user_chat
     print(f"  JSON Helpers:        ✅ Imported OK")
 except Exception as e:
     print(f"  JSON Helpers:        ❌ FAILED: {e}")
@@ -145,7 +156,7 @@ for name, mod_path in modules:
 # === 9. Full E2E: General Chat ===
 print("\n[9] Testing General Chat (E2E)...")
 try:
-    from utils.llm import async_chat_completion, get_model
+    from backend.utils.llm import async_chat_completion, get_model
 
     async def test_general():
         msgs = [
@@ -165,8 +176,9 @@ print("\n[10] Testing PDF Chatbot (Upload + Ask E2E)...")
 try:
     test_pdf = str(Path(__file__).parent / "test_dummy.pdf")
     if os.path.exists(test_pdf):
-        from utils.pdf_loader import extract_text_with_pages, chunk_pages
-        from utils.embeddings import build_and_save_vector_store, similarity_search
+        from backend.utils.pdf_loader import extract_text_with_pages, chunk_pages
+        from backend.utils.embeddings import build_and_save_vector_store, similarity_search
+
         import uuid
 
         pages = extract_text_with_pages(test_pdf)

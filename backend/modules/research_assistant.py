@@ -14,7 +14,7 @@ from utils.session_store import save_session_data, load_session_data
 
 router = APIRouter()
 
-UPLOAD_DIR = os.getenv("UPLOAD_DIR", "/tmp/uploaded_files")
+UPLOAD_DIR = os.getenv("UPLOAD_DIR", "uploaded_files")
 MAX_FILE_SIZE = 15 * 1024 * 1024  # 15 MB per file
 
 # Session storage: session_id -> list of doc info

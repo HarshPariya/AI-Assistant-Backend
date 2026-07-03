@@ -234,6 +234,28 @@ async def general_chat(
         return ChatResponse(answer=_fix_pollinations_urls(answer))
 
     except Exception as e:
+        # If it's a tool call validation error, retry without tools
+        err_str = str(e).lower()
+        if "tool call validation" in err_str or "tool_use_failed" in err_str or "attempted to call tool" in err_str:
+            try:
+                answer = await async_chat_completion(
+                    messages=api_messages,
+                    model=model_to_use,
+                    temperature=0.7,
+                    max_tokens=max_tok,
+                    tools=None,
+                )
+                return ChatResponse(answer=_fix_pollinations_urls(answer))
+            except Exception as retry_e:
+                import traceback
+                try:
+                    with open("backend_error.log", "a") as f:
+                        f.write(f"\n--- RETRY ERROR ---\n")
+                        traceback.print_exc(file=f)
+                except Exception:
+                    pass
+                raise HTTPException(status_code=500, detail=str(retry_e))
+
         import traceback
         try:
             with open("backend_error.log", "a") as f:

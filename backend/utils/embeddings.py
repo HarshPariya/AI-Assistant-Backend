@@ -22,7 +22,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 
 from utils.session_store import save_vector_store, load_vector_store
 
-VECTOR_STORE_DIR = os.getenv("VECTOR_STORE_DIR", "/tmp/vector_store")
+VECTOR_STORE_DIR = os.getenv("VECTOR_STORE_DIR", "vector_store")
 
 _embedding_model: SentenceTransformer | None = None
 

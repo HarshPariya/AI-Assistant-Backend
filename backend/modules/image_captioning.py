@@ -16,7 +16,7 @@ from utils.session_store import save_session_data, load_session_data, save_visio
 router = APIRouter()
 
 UPLOAD_DIR = os.getenv("UPLOAD_DIR", "uploaded_files")
-MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
+MAX_FILE_SIZE = 20 * 1024 * 1024  # 20 MB
 
 SUPPORTED_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
 
@@ -44,8 +44,22 @@ class VisionQAResponse(BaseModel):
 
 
 def encode_image_to_base64(file_path: str) -> str:
-    with open(file_path, "rb") as f:
-        return base64.b64encode(f.read()).decode("utf-8")
+    from PIL import Image
+    from io import BytesIO
+    try:
+        with Image.open(file_path) as img:
+            # Resize image to max 1024x1024 to prevent Groq API payload too large errors
+            img.thumbnail((1024, 1024))
+            if img.mode != 'RGB':
+                img = img.convert('RGB')
+            buffer = BytesIO()
+            img.save(buffer, format='JPEG', quality=85)
+            return base64.b64encode(buffer.getvalue()).decode("utf-8")
+    except Exception as e:
+        print(f"Image compression failed: {e}")
+        # Fallback to direct read if Pillow fails
+        with open(file_path, "rb") as f:
+            return base64.b64encode(f.read()).decode("utf-8")
 
 
 import asyncio
@@ -60,6 +74,8 @@ def vision_chat(image_path: str, prompt: str, max_tokens: int = 700) -> str:
         ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
         ".png": "image/png", ".gif": "image/gif", ".webp": "image/webp"
     }
+    # Since we compress and convert to JPEG in encode_image_to_base64, it's safer to just declare it as image/jpeg.
+    # But we'll use the original type just in case compression failed.
     media_type = media_type_map.get(ext, "image/jpeg")
 
     image_b64 = encode_image_to_base64(image_path)

@@ -5,9 +5,10 @@ Upload multiple PDFs, summarize, compare, generate study notes
 import os
 import uuid
 from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional
-from utils.llm import async_system_user_chat, get_model
+from utils.llm import async_system_user_chat, get_model, chat_completion_stream
 from utils.pdf_loader import extract_text_from_pdf, extract_text_with_pages, chunk_pages
 from utils.embeddings import async_build_and_save_vector_store, async_similarity_search
 from utils.session_store import save_session_data, load_session_data
@@ -189,6 +190,90 @@ async def perform_research_action(req: ResearchActionRequest):
         action=req.action,
         session_id=req.session_id,
     )
+
+
+@router.post("/stream")
+async def perform_research_action_stream(req: ResearchActionRequest):
+    """Perform a research action and stream the result."""
+    documents = research_sessions.get(req.session_id)
+    if not documents:
+        documents = load_session_data(req.session_id)
+        if documents:
+            research_sessions[req.session_id] = documents
+    if not documents:
+        raise HTTPException(status_code=404, detail="Session not found. Upload PDFs first.")
+
+    from utils.embeddings import _load_store
+    if _load_store(req.session_id) is None:
+        raise HTTPException(status_code=400, detail="Session expired due to server restart. Please re-upload your PDFs.")
+
+    doc_names = [d["filename"] for d in documents]
+
+    if req.action == "ask" and req.query:
+        chunks = await async_similarity_search(req.session_id, req.query, top_k=5)
+        context = "\n\n".join([f"[{c['doc_name']} - Page {c['page']}]: {c['text']}" for c in chunks])
+        user_message = f"Documents: {', '.join(doc_names)}\n\nContext:\n{context[:6000]}\n\nQuestion: {req.query}"
+        temperature = 0.3
+        max_tokens = 700
+
+    elif req.action == "summarize_all":
+        all_context = []
+        for doc in documents:
+            chunks = await async_similarity_search(req.session_id, f"main topics overview introduction conclusion {doc['filename']}", top_k=2)
+            for c in chunks:
+                if c.get("doc_id") == doc["doc_id"]:
+                    all_context.append(f"[{doc['filename']}]: {c['text']}")
+        context = "\n\n".join(all_context[:8])
+        user_message = f"Summarize these research documents:\nDocuments: {', '.join(doc_names)}\n\nContent samples:\n{context[:6000]}\n\nProvide a structured summary for each document (1-2 paragraphs each) followed by a brief overall synthesis."
+        temperature = 0.4
+        max_tokens = 800
+
+    elif req.action == "compare":
+        chunks = await async_similarity_search(req.session_id, "methodology findings results conclusions comparison", top_k=6)
+        context = "\n\n".join([f"[{c.get('doc_name', 'Doc')} - Page {c['page']}]: {c['text']}" for c in chunks])
+        user_message = f"Compare these documents: {', '.join(doc_names)}\n\nContent:\n{context[:6000]}\n\nCreate a comparison covering: methodology, findings, conclusions, similarities, and differences. Use headers."
+        temperature = 0.4
+        max_tokens = 800
+
+    elif req.action == "study_notes":
+        chunks = await async_similarity_search(req.session_id, "key concepts definitions important terms methodology", top_k=8)
+        context = "\n\n".join([f"[{c.get('doc_name', 'Doc')} - Page {c['page']}]: {c['text']}" for c in chunks])
+        user_message = f"Create study notes from: {', '.join(doc_names)}\n\nContent:\n{context[:6000]}\n\nFormat as: Key Concepts, Important Definitions, Main Arguments, Critical Points."
+        temperature = 0.4
+        max_tokens = 800
+
+    elif req.action == "key_takeaways":
+        chunks = await async_similarity_search(req.session_id, "conclusion findings results implications", top_k=6)
+        context = "\n\n".join([f"[{c.get('doc_name', 'Doc')} - Page {c['page']}]: {c['text']}" for c in chunks])
+        user_message = f"Extract key takeaways from: {', '.join(doc_names)}\n\nContent:\n{context[:6000]}\n\nList the 10 most important takeaways in bullet points, organized by theme."
+        temperature = 0.3
+        max_tokens = 700
+
+    else:
+        raise HTTPException(status_code=400, detail=f"Unknown action: {req.action}")
+
+    messages = [
+        {"role": "system", "content": RESEARCH_SYSTEM},
+        {"role": "user", "content": user_message},
+    ]
+
+    def stream_generator():
+        for chunk in chat_completion_stream(
+            messages=messages,
+            model=get_model(),
+            temperature=temperature,
+            max_tokens=max_tokens,
+        ):
+            yield chunk
+
+        import json
+        metadata = {
+            "action": req.action,
+            "session_id": req.session_id
+        }
+        yield f"__METADATA__::{json.dumps(metadata)}"
+
+    return StreamingResponse(stream_generator(), media_type="text/plain")
 
 
 @router.get("/session/{session_id}")

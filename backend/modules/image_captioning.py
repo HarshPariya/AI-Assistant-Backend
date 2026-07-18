@@ -9,7 +9,8 @@ from fastapi import APIRouter, UploadFile, File, HTTPException
 from pydantic import BaseModel
 from typing import Optional
 import asyncio
-from utils.llm import get_vision_model, chat_completion, async_chat_completion
+from fastapi.responses import StreamingResponse
+from utils.llm import get_vision_model, chat_completion, async_chat_completion, chat_completion_stream
 from utils.session_store import save_session_data, load_session_data, save_vision_image, load_vision_image
 
 router = APIRouter()
@@ -228,6 +229,82 @@ async def ask_about_image(req: VisionQARequest):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/stream")
+async def ask_about_image_stream(req: VisionQARequest):
+    """Ask a question about a previously uploaded image and stream the response."""
+    session = await _get_vision_session(req.session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found. Upload an image first.")
+
+    image_path = session["image_path"]
+    if not os.path.exists(image_path):
+        raise HTTPException(status_code=404, detail="Image file not found. Please re-upload.")
+
+    history_text = ""
+    if session["conversation"]:
+        history_text = "\n\nPrevious conversation:\n" + "\n".join(
+            [f"Q: {c['q']}\nA: {c['a']}" for c in session["conversation"][-2:]]
+        )
+
+    model = get_vision_model()
+    ext = os.path.splitext(image_path)[1].lower()
+    media_type_map = {
+        ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+        ".png": "image/png", ".gif": "image/gif", ".webp": "image/webp"
+    }
+    media_type = media_type_map.get(ext, "image/jpeg")
+    image_b64 = encode_image_to_base64(image_path)
+    prompt = f"Answer this question about the image: {req.question}{history_text}\n\nProvide a clear, concise answer."
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:{media_type};base64,{image_b64}"
+                    }
+                },
+                {"type": "text", "text": prompt}
+            ]
+        }
+    ]
+
+    def stream_generator():
+        full_answer = ""
+        import re
+        for chunk in chat_completion_stream(
+            messages=messages,
+            model=model,
+            temperature=0.4,
+            max_tokens=500,
+        ):
+            full_answer += chunk
+            # Basic client-side <think> strip would be better, but we yield as is
+            # except we don't know when a <think> tag ends in chunks easily.
+            # We'll just yield chunks and let frontend handle it or it might just show it.
+            # Actually, yielding chunks directly is fine, but to maintain exact compatibility:
+            yield chunk
+
+        cleaned_answer = re.sub(r'<think>.*?</think>', '', full_answer, flags=re.DOTALL).strip()
+        
+        session["conversation"].append({"q": req.question, "a": cleaned_answer})
+        save_session_data(req.session_id, "vision", {
+            "filename": session.get("filename"),
+            "ext": os.path.splitext(image_path)[1],
+            "conversation": session["conversation"],
+        })
+
+        import json
+        metadata = {
+            "session_id": req.session_id
+        }
+        yield f"\n__METADATA__::{json.dumps(metadata)}"
+
+    return StreamingResponse(stream_generator(), media_type="text/plain")
 
 
 @router.delete("/session/{session_id}")

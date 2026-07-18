@@ -5,8 +5,9 @@ Upload PDFs, build vector store, chat with source citations
 import os
 import uuid
 from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from utils.llm import async_chat_completion, async_system_user_chat, get_model
+from utils.llm import async_chat_completion, async_system_user_chat, get_model, chat_completion_stream
 from utils.pdf_loader import extract_text_with_pages, chunk_pages
 from utils.embeddings import async_build_and_save_vector_store, async_similarity_search
 from utils.session_store import save_session_data, load_session_data
@@ -174,6 +175,94 @@ async def ask_question(req: ChatRequest):
         sources=sorted(sources, key=lambda x: x["page"]),
         session_id=req.session_id,
     )
+
+
+@router.post("/stream")
+async def ask_question_stream(req: ChatRequest):
+    """Ask a question about the uploaded PDF using RAG and stream the response."""
+    if not req.message or not req.message.strip():
+        raise HTTPException(status_code=400, detail="Please enter a question.")
+
+    if req.session_id not in chat_sessions:
+        stored = load_session_data(req.session_id)
+        if isinstance(stored, dict):
+            chat_sessions[req.session_id] = stored.get("history", [])
+        elif isinstance(stored, list):
+            chat_sessions[req.session_id] = stored
+        else:
+            chat_sessions[req.session_id] = []
+
+    relevant_chunks = await async_similarity_search(req.session_id, req.message, top_k=4)
+
+    if not relevant_chunks:
+        meta = load_session_data(req.session_id)
+        if meta:
+            raise HTTPException(
+                status_code=400,
+                detail="Session expired due to server restart. Please re-upload your document."
+            )
+        raise HTTPException(
+            status_code=404,
+            detail="No documents found for this session. Please upload a PDF first."
+        )
+
+    context_parts = []
+    sources = []
+    seen_pages = set()
+
+    for chunk in relevant_chunks:
+        context_parts.append(f"[Page {chunk['page']}]: {chunk['text']}")
+        if chunk["page"] not in seen_pages:
+            sources.append({"page": chunk["page"], "score": round(chunk.get("score", 0), 3)})
+            seen_pages.add(chunk["page"])
+
+    context = "\n\n".join(context_parts)
+    history = chat_sessions.get(req.session_id, [])
+
+    messages = [
+        {"role": "system", "content": RAG_SYSTEM},
+    ]
+
+    for exchange in history[-3:]:
+        messages.append({"role": "user", "content": exchange["question"]})
+        messages.append({"role": "assistant", "content": exchange["answer"]})
+
+    messages.append({
+        "role": "user",
+        "content": f"Context from the document:\n{context[:6000]}\n\nQuestion: {req.message}"
+    })
+
+    def stream_generator():
+        full_answer = ""
+        for chunk in chat_completion_stream(
+            messages=messages,
+            model=get_model(),
+            temperature=0.3,
+            max_tokens=800,
+        ):
+            full_answer += chunk
+            yield chunk
+
+        if req.session_id not in chat_sessions:
+            chat_sessions[req.session_id] = []
+        chat_sessions[req.session_id].append({
+            "question": req.message,
+            "answer": full_answer,
+        })
+
+        stored = load_session_data(req.session_id)
+        meta = stored if isinstance(stored, dict) else {}
+        meta["history"] = chat_sessions[req.session_id]
+        save_session_data(req.session_id, "chatbot", meta)
+
+        import json
+        metadata = {
+            "sources": sorted(sources, key=lambda x: x["page"]),
+            "session_id": req.session_id
+        }
+        yield f"__METADATA__::{json.dumps(metadata)}"
+
+    return StreamingResponse(stream_generator(), media_type="text/plain")
 
 
 @router.get("/history/{session_id}")

@@ -5,7 +5,9 @@ Role-based interview question generation and mock interview mode
 import json
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from utils.llm import async_system_user_chat
+from typing import Optional
+from fastapi.responses import StreamingResponse
+from utils.llm import async_system_user_chat, chat_completion_stream
 from utils.json_helpers import async_json_system_user_chat
 
 router = APIRouter()
@@ -151,6 +153,50 @@ Evaluate and return JSON:
         raise HTTPException(status_code=500, detail="Failed to parse AI response. Please try again.")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/mock-evaluate-stream")
+async def evaluate_mock_answer_stream(req: MockInterviewRequest):
+    """Evaluate a candidate's mock interview answer and stream formatted markdown."""
+    history_text = ""
+    if req.conversation_history:
+        history_text = "\n\nConversation so far:\n" + "\n".join(
+            [f"Q: {h.get('question', '')}\nA: {h.get('answer', '')}"
+             for h in req.conversation_history[-2:]]
+        )
+
+    prompt = f"""Role: {req.role}
+Question asked: {req.question}
+Candidate's answer: {req.user_answer}{history_text}
+
+Provide detailed, constructive feedback on the candidate's answer.
+Format your response exactly as follows using Markdown:
+
+**Evaluation** (Score: <Score out of 100>/100)
+<Detailed evaluation of what was good and what was missing>
+
+**💡 Tips:**
+• <Tip 1>
+• <Tip 2>
+
+**📝 Strong Answer Includes:**
+<Brief description of what an ideal answer would look like>
+"""
+
+    messages = [
+        {"role": "system", "content": "You are a senior technical interviewer evaluating a candidate's answer. Be fair but rigorous."},
+        {"role": "user", "content": prompt}
+    ]
+
+    def stream_generator():
+        for chunk in chat_completion_stream(
+            messages=messages,
+            temperature=0.4,
+            max_tokens=900,
+        ):
+            yield chunk
+
+    return StreamingResponse(stream_generator(), media_type="text/plain")
 
 
 @router.post("/answer")

@@ -13,7 +13,9 @@ load_dotenv()
 _client: Groq | None = None
 
 # Active vision model
-VISION_MODEL = "qwen/qwen3.6-27b"
+VISION_MODEL = "llama-3.2-11b-vision-preview"  # Just to trigger the fallback, wait, actually let's use the one in env
+VISION_MODEL = "llama-3.2-11b-vision-preview" # I'll just change this to the model from env
+VISION_MODEL = "llama-3.2-11b-vision"
 TEXT_MODEL_DEFAULT = "llama-3.1-8b-instant"
 
 

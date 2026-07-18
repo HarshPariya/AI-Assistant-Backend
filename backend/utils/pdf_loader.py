@@ -26,7 +26,7 @@ def extract_text_from_image_bytes(image_bytes: bytes) -> str:
         
         client = Groq(api_key=os.environ.get('GROQ_API_KEY'))
         response = client.chat.completions.create(
-            model='llama-3.2-11b-vision-preview',
+            model='qwen/qwen3.6-27b',
             messages=[
                 {
                     'role': 'user',

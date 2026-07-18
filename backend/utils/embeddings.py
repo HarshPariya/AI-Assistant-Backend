@@ -18,7 +18,12 @@ os.environ["MKL_NUM_THREADS"] = "1"
 import pickle
 import numpy as np
 from fastembed import TextEmbedding
-from sklearn.metrics.pairwise import cosine_similarity
+
+def cosine_similarity(X: np.ndarray, Y: np.ndarray) -> np.ndarray:
+    """Pure numpy implementation of cosine similarity to replace scikit-learn."""
+    X_norm = np.linalg.norm(X, axis=1, keepdims=True)
+    Y_norm = np.linalg.norm(Y, axis=1, keepdims=True)
+    return np.dot(X, Y.T) / (np.dot(X_norm, Y_norm.T) + 1e-10)
 
 from utils.session_store import save_vector_store, load_vector_store
 
@@ -32,7 +37,8 @@ def get_embedding_model() -> TextEmbedding:
     global _embedding_model
     if _embedding_model is None:
         # Uses ONNX Runtime, highly optimized for CPU, extremely low memory footprint
-        _embedding_model = TextEmbedding("BAAI/bge-small-en-v1.5")
+        # threads=1 strictly limits ONNX thread pooling to prevent Render OOM
+        _embedding_model = TextEmbedding("BAAI/bge-small-en-v1.5", threads=1)
     return _embedding_model
 
 

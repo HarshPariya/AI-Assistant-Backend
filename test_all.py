@@ -110,12 +110,13 @@ except Exception as e:
 # === 5. Test Embeddings ===
 print("\n[5] Testing Embedding Model...")
 try:
-    from backend.utils.embeddings import get_embedding_model, embed_texts
+    from backend.utils.embeddings import get_embedding_model, embed_texts, CHROMA_AVAILABLE
     model = get_embedding_model()
     embeddings = embed_texts(["Hello world", "Test sentence for embeddings"])
-    print(f"  Embedding Model:     ✅ OK (shape: ({len(embeddings)}, {len(embeddings[0])}), model: BAAI/bge-small-en-v1.5)")
-except ImportError:
-    print(f"  Embedding Model:     ⚠️  Skipped (chromadb not installed locally)")
+    mode_str = "ChromaDB" if CHROMA_AVAILABLE else "NumPy Fallback"
+    num_embeddings = len(embeddings)
+    dim_embeddings = len(embeddings[0]) if isinstance(embeddings, list) else embeddings.shape[1]
+    print(f"  Embedding Model:     ✅ OK (shape: ({num_embeddings}, {dim_embeddings}), mode: {mode_str})")
 except Exception as e:
     print(f"  Embedding Model:     ❌ FAILED: {e}")
 
@@ -176,11 +177,10 @@ except Exception as e:
 # === 10. Full E2E: PDF Chatbot (Upload + Ask) ===
 print("\n[10] Testing PDF Chatbot (Upload + Ask E2E)...")
 try:
-    import chromadb  # type: ignore
     test_pdf = str(Path(__file__).parent / "test_dummy.pdf")
     if os.path.exists(test_pdf):
         from backend.utils.pdf_loader import extract_text_with_pages, chunk_pages
-        from backend.utils.embeddings import build_and_save_vector_store, similarity_search
+        from backend.utils.embeddings import build_and_save_vector_store, similarity_search, CHROMA_AVAILABLE
 
         import uuid
 
@@ -189,7 +189,8 @@ try:
         session_id = str(uuid.uuid4())
         count = build_and_save_vector_store(session_id, chunks)
         results = similarity_search(session_id, "What is this document about?", top_k=3)
-        print(f"  PDF RAG Pipeline:    ✅ OK ({count} chunks indexed, {len(results)} results found)")
+        mode_str = "ChromaDB" if CHROMA_AVAILABLE else "NumPy Fallback"
+        print(f"  PDF RAG Pipeline:    ✅ OK ({count} chunks indexed, {len(results)} results found, mode: {mode_str})")
 
         # Cleanup
         import glob
@@ -201,8 +202,6 @@ try:
                 os.remove(f)
     else:
         print(f"  PDF RAG Pipeline:    ⚠️  No test_dummy.pdf found, skipping")
-except ImportError:
-    print(f"  PDF RAG Pipeline:    ⚠️  Skipped (chromadb not installed locally on Windows)")
 except Exception as e:
     print(f"  PDF RAG Pipeline:    ❌ FAILED: {e}")
 

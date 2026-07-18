@@ -16,7 +16,7 @@ os.environ["MKL_NUM_THREADS"] = "1"
 
 import pickle
 import numpy as np
-import chromadb
+import chromadb  # type: ignore
 from fastembed import TextEmbedding
 from utils.session_store import save_vector_store, load_vector_store
 

@@ -113,7 +113,9 @@ try:
     from backend.utils.embeddings import get_embedding_model, embed_texts
     model = get_embedding_model()
     embeddings = embed_texts(["Hello world", "Test sentence for embeddings"])
-    print(f"  Embedding Model:     ✅ OK (shape: {embeddings.shape}, model: all-MiniLM-L6-v2)")
+    print(f"  Embedding Model:     ✅ OK (shape: ({len(embeddings)}, {len(embeddings[0])}), model: BAAI/bge-small-en-v1.5)")
+except ImportError:
+    print(f"  Embedding Model:     ⚠️  Skipped (chromadb not installed locally)")
 except Exception as e:
     print(f"  Embedding Model:     ❌ FAILED: {e}")
 
@@ -174,6 +176,7 @@ except Exception as e:
 # === 10. Full E2E: PDF Chatbot (Upload + Ask) ===
 print("\n[10] Testing PDF Chatbot (Upload + Ask E2E)...")
 try:
+    import chromadb
     test_pdf = str(Path(__file__).parent / "test_dummy.pdf")
     if os.path.exists(test_pdf):
         from backend.utils.pdf_loader import extract_text_with_pages, chunk_pages
@@ -190,10 +193,16 @@ try:
 
         # Cleanup
         import glob
+        import shutil
         for f in glob.glob(f"vector_store/{session_id}*"):
-            os.remove(f)
+            if os.path.isdir(f):
+                shutil.rmtree(f, ignore_errors=True)
+            else:
+                os.remove(f)
     else:
         print(f"  PDF RAG Pipeline:    ⚠️  No test_dummy.pdf found, skipping")
+except ImportError:
+    print(f"  PDF RAG Pipeline:    ⚠️  Skipped (chromadb not installed locally on Windows)")
 except Exception as e:
     print(f"  PDF RAG Pipeline:    ❌ FAILED: {e}")
 

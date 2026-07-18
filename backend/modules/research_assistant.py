@@ -60,7 +60,10 @@ async def upload_research_pdfs(files: list[UploadFile] = File(...)):
     documents = []
 
     for i, file in enumerate(files):
-        if not file.filename.lower().endswith(".pdf"):
+        ext = file.filename.lower().split('.')[-1]
+        is_pdf = ext == "pdf"
+        is_image = ext in ["jpg", "jpeg", "png", "webp", "gif"]
+        if not (is_pdf or is_image):
             continue
 
         # Read and validate file size
@@ -68,14 +71,23 @@ async def upload_research_pdfs(files: list[UploadFile] = File(...)):
         if len(content) > MAX_FILE_SIZE:
             continue  # Skip oversized files silently
 
-        file_path = os.path.join(UPLOAD_DIR, f"research_{session_id}_{i}.pdf")
+        file_path = os.path.join(UPLOAD_DIR, f"research_{session_id}_{i}.{ext}")
 
         with open(file_path, "wb") as f:
             f.write(content)
 
         try:
-            pages = extract_text_with_pages(file_path)
-            full_text = extract_text_from_pdf(file_path)
+            if is_pdf:
+                pages = extract_text_with_pages(file_path)
+                full_text = extract_text_from_pdf(file_path)
+            else:
+                from utils.pdf_loader import extract_text_from_image_bytes
+                ocr_text = extract_text_from_image_bytes(content)
+                if not ocr_text:
+                    ocr_text = "[System Note: Image analysis returned no text.]"
+                pages = [{"page": 1, "text": ocr_text, "char_count": len(ocr_text)}]
+                full_text = ocr_text
+
 
             doc_chunks = chunk_pages(pages)
             for chunk in doc_chunks:

@@ -2,20 +2,70 @@
 PDF Text Extraction Utility
 Uses pypdf for pure-Python robust text extraction with page tracking,
 avoiding C-extension crashes in serverless deployments.
+Includes OCR fallback for image-only PDFs using Groq Vision API.
 """
 import os
+import io
+import base64
 from pathlib import Path
 from pypdf import PdfReader
+from pypdf.errors import PdfStreamError
+from PIL import Image
+
+def extract_text_from_image_bytes(image_bytes: bytes) -> str:
+    """Uses Groq Vision API to extract text from an image."""
+    try:
+        from groq import Groq
+        with Image.open(io.BytesIO(image_bytes)) as img:
+            img.thumbnail((1024, 1024))
+            if img.mode != 'RGB':
+                img = img.convert('RGB')
+            buffer = io.BytesIO()
+            img.save(buffer, format='JPEG', quality=85)
+            b64_str = base64.b64encode(buffer.getvalue()).decode('utf-8')
+        
+        client = Groq(api_key=os.environ.get('GROQ_API_KEY'))
+        response = client.chat.completions.create(
+            model='llama-3.2-11b-vision-preview',
+            messages=[
+                {
+                    'role': 'user',
+                    'content': [
+                        {'type': 'text', 'text': 'Extract all text from this image exactly as written. If there is no text, briefly describe the image. Return only the extracted text or description.'},
+                        {'type': 'image_url', 'image_url': {'url': f'data:image/jpeg;base64,{b64_str}'}}
+                    ]
+                }
+            ],
+            temperature=0.1,
+            max_tokens=1024
+        )
+        return response.choices[0].message.content or ""
+    except Exception as e:
+        print(f"OCR Error: {e}")
+        return ""
 
 
 def extract_text_from_pdf(file_path: str) -> str:
     """Extract all text from a PDF file."""
-    reader = PdfReader(file_path)
+    try:
+        reader = PdfReader(file_path)
+    except Exception as e:
+        print(f"PdfReader init failed for {file_path}: {e}")
+        return ""
     text = ""
     for page in reader.pages:
-        t = page.extract_text()
-        if t:
-            text += t + "\n"
+        try:
+            t = page.extract_text()
+            if t:
+                text += t + "\n"
+            else:
+                # OCR Fallback for the page
+                for image_file_object in page.images:
+                    ocr_text = extract_text_from_image_bytes(image_file_object.data)
+                    if ocr_text:
+                        text += ocr_text + "\n"
+        except Exception:
+            continue
     
     if not text.strip():
         return "[System Note: This PDF contains no extractable text. It might be a scanned document or image-based PDF. Inform the user that you cannot read its contents and ask them if they have a text-based version.]"
@@ -24,18 +74,38 @@ def extract_text_from_pdf(file_path: str) -> str:
 
 def extract_text_with_pages(file_path: str) -> list[dict]:
     """Extract text per page with page numbers for citation."""
-    reader = PdfReader(file_path)
+    try:
+        reader = PdfReader(file_path)
+    except Exception as e:
+        print(f"PdfReader init failed for {file_path}: {e}")
+        return []
     pages = []
+    
+    # Process max 10 pages for OCR to avoid massive rate limits on Groq
+    ocr_count = 0
+    
     for i, page in enumerate(reader.pages):
-        text = page.extract_text()
-        if text:
-            text = text.strip()
-            if text:
+        try:
+            text = page.extract_text()
+            if not text or not text.strip():
+                # Attempt OCR if no text found on page
+                if ocr_count < 10:
+                    for img_obj in page.images:
+                        ocr_res = extract_text_from_image_bytes(img_obj.data)
+                        if ocr_res:
+                            text = (text or "") + "\n" + ocr_res
+                    if text and text.strip():
+                        ocr_count += 1
+                        
+            if text and text.strip():
                 pages.append({
                     "page": i + 1,
-                    "text": text,
-                    "char_count": len(text),
+                    "text": text.strip(),
+                    "char_count": len(text.strip()),
                 })
+        except Exception:
+            continue
+            
     if not pages:
         pages.append({
             "page": 1,

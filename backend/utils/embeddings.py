@@ -1,7 +1,6 @@
 """
-Embeddings Utility — Sentence Transformers + Pure NumPy Vector Store
-Uses cosine similarity with numpy + pickle for persistence.
-MongoDB fallback for Render/ephemeral deployments.
+Embeddings Utility — ChromaDB + FastEmbed Vector Store
+Uses ChromaDB for blazing-fast similarity search with MongoDB fallback.
 """
 import asyncio
 import os
@@ -17,73 +16,119 @@ os.environ["MKL_NUM_THREADS"] = "1"
 
 import pickle
 import numpy as np
+import chromadb
 from fastembed import TextEmbedding
-
-def cosine_similarity(X: np.ndarray, Y: np.ndarray) -> np.ndarray:
-    """Pure numpy implementation of cosine similarity to replace scikit-learn."""
-    X_norm = np.linalg.norm(X, axis=1, keepdims=True)
-    Y_norm = np.linalg.norm(Y, axis=1, keepdims=True)
-    return np.dot(X, Y.T) / (np.dot(X_norm, Y_norm.T) + 1e-10)
-
 from utils.session_store import save_vector_store, load_vector_store
 
 VECTOR_STORE_DIR = os.getenv("VECTOR_STORE_DIR", "vector_store")
 
 _embedding_model: TextEmbedding | None = None
+_chroma_client: chromadb.PersistentClient | None = None
 
 
 def get_embedding_model() -> TextEmbedding:
     """Get or create the fastembed TextEmbedding model."""
     global _embedding_model
     if _embedding_model is None:
-        # Uses ONNX Runtime, highly optimized for CPU, extremely low memory footprint
         # threads=1 strictly limits ONNX thread pooling to prevent Render OOM
         _embedding_model = TextEmbedding("BAAI/bge-small-en-v1.5", threads=1)
     return _embedding_model
 
 
+def get_chroma_client() -> chromadb.PersistentClient:
+    """Get or create the persistent ChromaDB client."""
+    global _chroma_client
+    if _chroma_client is None:
+        os.makedirs(VECTOR_STORE_DIR, exist_ok=True)
+        _chroma_client = chromadb.PersistentClient(path=VECTOR_STORE_DIR)
+    return _chroma_client
+
+
 def preload_embedding_model() -> None:
-    """Warm up the embedding model on startup to avoid first-request delay."""
+    """Warm up the embedding model and Chroma on startup to avoid first-request delay."""
     get_embedding_model()
+    get_chroma_client()
 
 
-def embed_texts(texts: list[str]) -> np.ndarray:
-    """Embed a list of texts into normalized vectors."""
+def embed_texts(texts: list[str]) -> list[list[float]]:
+    """Embed a list of texts into normalized vectors (list of floats for Chroma)."""
     model = get_embedding_model()
-    # fastembed yields a generator of numpy arrays
     embeddings = list(model.embed(texts))
-    return np.array(embeddings, dtype="float32")
+    # Chroma requires list of list of floats, not numpy arrays
+    return [e.tolist() for e in embeddings]
 
 
-async def async_embed_texts(texts: list[str]) -> np.ndarray:
+async def async_embed_texts(texts: list[str]) -> list[list[float]]:
     """Non-blocking embedding."""
     return await asyncio.to_thread(embed_texts, texts)
 
 
-def _load_store(session_id: str) -> dict | None:
-    """Load vector store from disk or MongoDB."""
-    store_path = os.path.join(VECTOR_STORE_DIR, f"{session_id}.pkl")
-    if os.path.exists(store_path):
-        with open(store_path, "rb") as f:
-            return pickle.load(f)
-    return load_vector_store(session_id)
+def _load_store(session_id: str):
+    """Ensure ChromaDB has the collection for this session. 
+    If not found locally (Render restart), restore from MongoDB backup."""
+    client = get_chroma_client()
+    
+    # Check if collection exists locally
+    try:
+        collection = client.get_collection(name=session_id)
+        if collection.count() > 0:
+            return collection
+    except Exception:
+        pass
+        
+    # Collection not found locally or is empty, try loading from MongoDB
+    store = load_vector_store(session_id)
+    if not store:
+        return None
+        
+    # Re-hydrate ChromaDB collection from MongoDB backup
+    collection = client.get_or_create_collection(
+        name=session_id,
+        metadata={"hnsw:space": "cosine"}
+    )
+    chunks = store["chunks"]
+    embeddings = store["embeddings"]
+    
+    ids = [f"id_{i}" for i in range(len(chunks))]
+    metadatas = [{"chunk_id": c.get("chunk_id", ""), "page": c.get("page", 0)} for c in chunks]
+    documents = [c.get("text", "") for c in chunks]
+    
+    collection.add(
+        embeddings=embeddings,
+        documents=documents,
+        metadatas=metadatas,
+        ids=ids
+    )
+    return collection
 
 
 def build_and_save_vector_store(session_id: str, chunks: list[dict]) -> int:
-    """Embed chunks, compute embeddings, and save to disk + MongoDB. Returns chunk count."""
-    os.makedirs(VECTOR_STORE_DIR, exist_ok=True)
+    """Embed chunks, compute embeddings, and save to ChromaDB + MongoDB backup. Returns chunk count."""
     texts = [c["text"] for c in chunks]
     embeddings = embed_texts(texts)
 
+    # 1. Save to ChromaDB for fast search
+    client = get_chroma_client()
+    collection = client.get_or_create_collection(
+        name=session_id,
+        metadata={"hnsw:space": "cosine"}
+    )
+    
+    ids = [f"id_{i}" for i in range(len(chunks))]
+    metadatas = [{"chunk_id": c.get("chunk_id", ""), "page": c.get("page", 0)} for c in chunks]
+    
+    collection.add(
+        embeddings=embeddings,
+        documents=texts,
+        metadatas=metadatas,
+        ids=ids
+    )
+    
+    # 2. Save pure dict to MongoDB for Render ephemeral fallback
     store = {
         "embeddings": embeddings,
         "chunks": chunks,
     }
-
-    store_path = os.path.join(VECTOR_STORE_DIR, f"{session_id}.pkl")
-    with open(store_path, "wb") as f:
-        pickle.dump(store, f)
-
     save_vector_store(session_id, store)
     return len(chunks)
 
@@ -94,27 +139,41 @@ async def async_build_and_save_vector_store(session_id: str, chunks: list[dict])
 
 
 def similarity_search(session_id: str, query: str, top_k: int = 5) -> list[dict]:
-    """Search for the most relevant chunks for a query using cosine similarity."""
-    store = _load_store(session_id)
-    if store is None:
+    """Search for the most relevant chunks for a query using ChromaDB."""
+    collection = _load_store(session_id)
+    if collection is None:
         return []
 
-    embeddings = store["embeddings"]
-    chunks = store["chunks"]
-
     query_embedding = embed_texts([query])
-    similarities = cosine_similarity(query_embedding, embeddings)[0]
+    
+    # Query ChromaDB
+    results = collection.query(
+        query_embeddings=query_embedding,
+        n_results=top_k
+    )
+    
+    # Format results to match previous return shape
+    formatted_results = []
+    
+    if results['documents'] and len(results['documents'][0]) > 0:
+        docs = results['documents'][0]
+        metas = results['metadatas'][0]
+        distances = results['distances'][0]
+        
+        for doc, meta, distance in zip(docs, metas, distances):
+            # ChromaDB cosine distance = 1 - cosine_similarity
+            score = 1.0 - distance
+            
+            if score > 0.1:
+                chunk = {
+                    "text": doc,
+                    "score": float(score),
+                }
+                if meta:
+                    chunk.update(meta)
+                formatted_results.append(chunk)
 
-    top_indices = np.argsort(similarities)[::-1][:top_k]
-
-    results = []
-    for idx in top_indices:
-        if similarities[idx] > 0.1:
-            chunk = chunks[idx].copy()
-            chunk["score"] = float(similarities[idx])
-            results.append(chunk)
-
-    return results
+    return formatted_results
 
 
 async def async_similarity_search(session_id: str, query: str, top_k: int = 5) -> list[dict]:

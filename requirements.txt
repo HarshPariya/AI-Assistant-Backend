@@ -12,6 +12,7 @@ groq==0.13.1
 
 # Embeddings (pure Python - works on all Python versions)
 fastembed>=0.5.0
+chromadb==0.5.20
 
 # PDF Processing
 pypdf==5.1.0

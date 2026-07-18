@@ -79,7 +79,7 @@ async def upload_research_pdfs(files: list[UploadFile] = File(...)):
         try:
             if is_pdf:
                 pages = extract_text_with_pages(file_path)
-                full_text = extract_text_from_pdf(file_path)
+                full_text = "\n".join([p["text"] for p in pages])
             else:
                 from utils.pdf_loader import extract_text_from_image_bytes
                 ocr_text = extract_text_from_image_bytes(content)

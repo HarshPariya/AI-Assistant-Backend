@@ -33,3 +33,4 @@ scikit-learn==1.5.2
 pymongo==4.10.1
 ddgs
  
+pillow-heif>=0.18.0

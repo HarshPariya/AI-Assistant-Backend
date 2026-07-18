@@ -18,7 +18,7 @@ router = APIRouter()
 UPLOAD_DIR = os.getenv("UPLOAD_DIR", "uploaded_files")
 MAX_FILE_SIZE = 20 * 1024 * 1024  # 20 MB
 
-SUPPORTED_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
+SUPPORTED_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp", "image/heic", "image/heif"}
 
 # Session storage for image Q&A
 vision_sessions: dict[str, dict] = {}
@@ -46,6 +46,12 @@ class VisionQAResponse(BaseModel):
 def encode_image_to_base64(file_path: str) -> str:
     from PIL import Image
     from io import BytesIO
+    try:
+        import pillow_heif
+        pillow_heif.register_heif_opener()
+    except ImportError:
+        pass
+
     try:
         with Image.open(file_path) as img:
             # Resize image to max 1024x1024 to prevent Groq API payload too large errors

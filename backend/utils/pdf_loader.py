@@ -89,7 +89,7 @@ def extract_text_with_pages(file_path: str) -> list[dict]:
             text = page.extract_text()
             if not text or not text.strip():
                 # Attempt OCR if no text found on page
-                if ocr_count < 10:
+                if ocr_count < 3:
                     for img_obj in page.images:
                         ocr_res = extract_text_from_image_bytes(img_obj.data)
                         if ocr_res:

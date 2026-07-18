@@ -176,7 +176,7 @@ except Exception as e:
 # === 10. Full E2E: PDF Chatbot (Upload + Ask) ===
 print("\n[10] Testing PDF Chatbot (Upload + Ask E2E)...")
 try:
-    import chromadb
+    import chromadb  # type: ignore
     test_pdf = str(Path(__file__).parent / "test_dummy.pdf")
     if os.path.exists(test_pdf):
         from backend.utils.pdf_loader import extract_text_with_pages, chunk_pages

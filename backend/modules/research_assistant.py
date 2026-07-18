@@ -50,8 +50,8 @@ async def upload_research_pdfs(files: list[UploadFile] = File(...)):
     """Upload multiple PDFs for research analysis."""
     if not files:
         raise HTTPException(status_code=400, detail="No files uploaded.")
-    if len(files) > 10:
-        raise HTTPException(status_code=400, detail="Maximum 10 PDFs allowed.")
+    if len(files) > 3:
+        raise HTTPException(status_code=400, detail="Maximum 3 PDFs allowed.")
 
     session_id = str(uuid.uuid4())
     os.makedirs(UPLOAD_DIR, exist_ok=True)

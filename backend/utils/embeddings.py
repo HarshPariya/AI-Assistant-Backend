@@ -17,21 +17,22 @@ os.environ["MKL_NUM_THREADS"] = "1"
 
 import pickle
 import numpy as np
-from sentence_transformers import SentenceTransformer
+from fastembed import TextEmbedding
 from sklearn.metrics.pairwise import cosine_similarity
 
 from utils.session_store import save_vector_store, load_vector_store
 
 VECTOR_STORE_DIR = os.getenv("VECTOR_STORE_DIR", "vector_store")
 
-_embedding_model: SentenceTransformer | None = None
+_embedding_model: TextEmbedding | None = None
 
 
-def get_embedding_model() -> SentenceTransformer:
-    """Get or create the sentence transformer model."""
+def get_embedding_model() -> TextEmbedding:
+    """Get or create the fastembed TextEmbedding model."""
     global _embedding_model
     if _embedding_model is None:
-        _embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+        # Uses ONNX Runtime, highly optimized for CPU, extremely low memory footprint
+        _embedding_model = TextEmbedding("BAAI/bge-small-en-v1.5")
     return _embedding_model
 
 
@@ -43,7 +44,8 @@ def preload_embedding_model() -> None:
 def embed_texts(texts: list[str]) -> np.ndarray:
     """Embed a list of texts into normalized vectors."""
     model = get_embedding_model()
-    embeddings = model.encode(texts, normalize_embeddings=True, show_progress_bar=False, batch_size=64)
+    # fastembed yields a generator of numpy arrays
+    embeddings = list(model.embed(texts))
     return np.array(embeddings, dtype="float32")
 
 

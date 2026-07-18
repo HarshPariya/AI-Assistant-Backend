@@ -11,9 +11,7 @@ groq==0.13.1
 
 
 # Embeddings (pure Python - works on all Python versions)
---extra-index-url https://download.pytorch.org/whl/cpu
-torch
-sentence-transformers==3.3.1
+fastembed>=0.5.0
 
 # PDF Processing
 PyMuPDF==1.25.1

@@ -12,8 +12,8 @@ load_dotenv()
 
 _client: Groq | None = None
 
-# Active vision model (llama-4-scout replaces decommissioned llama-3.2-90b-vision-preview)
-VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
+# Active vision model
+VISION_MODEL = "qwen/qwen3.6-27b"
 TEXT_MODEL_DEFAULT = "llama-3.1-8b-instant"
 
 

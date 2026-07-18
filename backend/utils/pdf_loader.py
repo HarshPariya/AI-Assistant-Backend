@@ -16,6 +16,9 @@ def extract_text_from_pdf(file_path: str) -> str:
         t = page.extract_text()
         if t:
             text += t + "\n"
+    
+    if not text.strip():
+        return "[System Note: This PDF contains no extractable text. It might be a scanned document or image-based PDF. Inform the user that you cannot read its contents and ask them if they have a text-based version.]"
     return text.strip()
 
 
@@ -33,6 +36,12 @@ def extract_text_with_pages(file_path: str) -> list[dict]:
                     "text": text,
                     "char_count": len(text),
                 })
+    if not pages:
+        pages.append({
+            "page": 1,
+            "text": "[System Note: This PDF contains no extractable text. It might be a scanned document or image-based PDF. Inform the user that you cannot read its contents and ask them if they have a text-based version.]",
+            "char_count": 200,
+        })
     return pages
 
 

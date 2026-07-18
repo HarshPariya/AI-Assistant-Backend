@@ -138,7 +138,10 @@ async def analyze_image(file: UploadFile = File(...)):
         )
 
         import json
+        import re
         cleaned = full_analysis.strip()
+        # Strip <think> blocks for reasoning models
+        cleaned = re.sub(r'<think>.*?</think>', '', cleaned, flags=re.DOTALL).strip()
         # Strip markdown code blocks if present
         if "```" in cleaned:
             parts = cleaned.split("```")
@@ -210,6 +213,9 @@ async def ask_about_image(req: VisionQARequest):
             f"Answer this question about the image: {req.question}{history_text}\n\nProvide a clear, concise answer.",
             max_tokens=500,
         )
+
+        import re
+        answer = re.sub(r'<think>.*?</think>', '', answer, flags=re.DOTALL).strip()
 
         session["conversation"].append({"q": req.question, "a": answer})
         save_session_data(req.session_id, "vision", {

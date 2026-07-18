@@ -151,6 +151,14 @@ def _load_store_numpy(session_id: str) -> dict | None:
     return store
 
 
+def _load_store(session_id: str):
+    """Load the vector store (Chroma collection or NumPy dict) for a session."""
+    if CHROMA_AVAILABLE:
+        return _load_store_chroma(session_id)
+    else:
+        return _load_store_numpy(session_id)
+
+
 def build_and_save_vector_store(session_id: str, chunks: list[dict]) -> int:
     """Embed chunks, compute embeddings, and save to Vector Store + MongoDB backup."""
     texts = [c["text"] for c in chunks]

@@ -58,12 +58,6 @@ def extract_text_from_pdf(file_path: str) -> str:
             t = page.extract_text()
             if t:
                 text += t + "\n"
-            else:
-                # OCR Fallback for the page
-                for image_file_object in page.images:
-                    ocr_text = extract_text_from_image_bytes(image_file_object.data)
-                    if ocr_text:
-                        text += ocr_text + "\n"
         except Exception:
             continue
     
@@ -87,15 +81,6 @@ def extract_text_with_pages(file_path: str) -> list[dict]:
     for i, page in enumerate(reader.pages):
         try:
             text = page.extract_text()
-            if not text or not text.strip():
-                # Attempt OCR if no text found on page
-                if ocr_count < 3:
-                    for img_obj in page.images:
-                        ocr_res = extract_text_from_image_bytes(img_obj.data)
-                        if ocr_res:
-                            text = (text or "") + "\n" + ocr_res
-                    if text and text.strip():
-                        ocr_count += 1
                         
             if text and text.strip():
                 pages.append({

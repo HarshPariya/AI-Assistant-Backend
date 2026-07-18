@@ -13,9 +13,7 @@ load_dotenv()
 _client: Groq | None = None
 
 # Active vision model
-VISION_MODEL = "llama-3.2-11b-vision-preview"  # Just to trigger the fallback, wait, actually let's use the one in env
-VISION_MODEL = "llama-3.2-11b-vision-preview" # I'll just change this to the model from env
-VISION_MODEL = "llama-3.2-11b-vision"
+VISION_MODEL = "qwen/qwen3.6-27b"
 TEXT_MODEL_DEFAULT = "llama-3.1-8b-instant"
 
 
@@ -128,7 +126,7 @@ def chat_completion(
             last_error = e
             error_str = str(e).lower()
             # Don't retry on client errors (4xx) — only on rate limits / server errors
-            if "400" in str(e) or "401" in str(e) or "403" in str(e):
+            if "400" in error_str or "401" in error_str or "403" in error_str or "404" in error_str:
                 print(f"Groq API Client Error (no retry): {str(e)}")
                 raise
 
@@ -173,7 +171,8 @@ def chat_completion_stream(
                     yield chunk.choices[0].delta.content
             return
         except Exception as e:
-            if "400" in str(e) or "401" in str(e) or "403" in str(e):
+            error_str = str(e).lower()
+            if "400" in error_str or "401" in error_str or "403" in error_str or "404" in error_str:
                 yield f"Error: {str(e)}"
                 return
             if attempt < max_retries - 1:

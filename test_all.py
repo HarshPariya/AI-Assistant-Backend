@@ -34,7 +34,7 @@ print("=" * 60)
 print("\n[1] Checking Environment Variables...")
 api_key = os.getenv("GROQ_API_KEY", "")
 groq_model = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
-groq_vision = os.getenv("GROQ_VISION_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
+groq_vision = os.getenv("GROQ_VISION_MODEL", "qwen/qwen3.6-27b")
 mongodb_url = os.getenv("MONGODB_URL", "")
 
 print(f"  GROQ_API_KEY:        {'✅ Set (' + api_key[:12] + '...)' if api_key and api_key != 'your_groq_api_key_here' else '❌ NOT SET'}")
@@ -59,7 +59,7 @@ except Exception as e:
     print(f"  Groq Text API:       ❌ FAILED: {e}")
 
 # === 3. Test Vision API ===
-print("\n[3] Testing Groq Vision API (llama-4-scout)...")
+print("\n[3] Testing Groq Vision API (qwen3.6-27b)...")
 try:
     def _make_test_png(w=20, h=20, rgb=(255, 50, 50)):
         def chunk(name, data):
@@ -73,10 +73,10 @@ try:
         iend = chunk(b'IEND', b'')
         return sig + ihdr + idat + iend
 
-    img_bytes = _make_test_png(20, 20, (255, 50, 50))
+    img_bytes = _make_test_png(50, 50, (255, 50, 50))
     img_b64 = base64.b64encode(img_bytes).decode("utf-8")
     response = client.chat.completions.create(
-        model="meta-llama/llama-4-scout-17b-16e-instruct",
+        model="qwen/qwen3.6-27b",
         messages=[{
             "role": "user",
             "content": [

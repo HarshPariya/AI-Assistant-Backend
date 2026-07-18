@@ -65,7 +65,11 @@ async def upload_pdf(file: UploadFile = File(...)):
         f.write(content)
 
     try:
-        pages = extract_text_with_pages(file_path)
+        try:
+            pages = extract_text_with_pages(file_path)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Failed to read PDF file: {e}")
+
         if not pages:
             raise HTTPException(status_code=400, detail="No text found in the PDF.")
 

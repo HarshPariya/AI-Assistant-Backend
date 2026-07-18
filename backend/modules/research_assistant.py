@@ -90,6 +90,10 @@ async def upload_research_pdfs(files: list[UploadFile] = File(...)):
                 "word_count": len(full_text.split()),
                 "chunk_count": len(doc_chunks),
             })
+        except Exception as e:
+            print(f"Failed to process {file.filename}: {e}")
+            # Skip this file but continue processing others
+            continue
         finally:
             if os.path.exists(file_path):
                 os.remove(file_path)

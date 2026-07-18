@@ -140,6 +140,48 @@ def chat_completion(
                 raise last_error
 
 
+def chat_completion_stream(
+    messages: list[dict],
+    model: str | None = None,
+    temperature: float = 0.7,
+    max_tokens: int = 1024,
+):
+    """
+    Run a chat completion with Groq yielding chunks for streaming.
+    Tools are intentionally excluded for pure streaming simplicity and speed.
+    """
+    client = get_groq_client()
+    selected_model = model or get_model()
+
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            kwargs = {
+                "model": selected_model,
+                "messages": messages,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "stream": True,
+            }
+            
+            response = client.chat.completions.create(**kwargs)
+            
+            for chunk in response:
+                if chunk.choices and chunk.choices[0].delta.content:
+                    yield chunk.choices[0].delta.content
+            return
+        except Exception as e:
+            if "400" in str(e) or "401" in str(e) or "403" in str(e):
+                yield f"Error: {str(e)}"
+                return
+            if attempt < max_retries - 1:
+                import time
+                time.sleep(attempt + 1)
+            else:
+                yield f"Error: {str(e)}"
+                return
+
+
 def system_user_chat(
     system_prompt: str,
     user_message: str,

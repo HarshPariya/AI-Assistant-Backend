@@ -9,8 +9,9 @@ import re
 import tempfile
 from urllib.parse import quote, unquote
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from utils.llm import get_model, get_vision_model, async_chat_completion
+from utils.llm import get_model, get_vision_model, async_chat_completion, chat_completion_stream
 from utils.pdf_loader import extract_text_with_pages
 from typing import Optional, List
 
@@ -264,3 +265,103 @@ async def general_chat(
         except Exception:
             pass
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/stream")
+async def general_chat_stream(
+    messages: str = Form(...),
+    file: Optional[UploadFile] = File(None),
+):
+    """General chat streaming endpoint."""
+
+    try:
+        raw_msgs = json.loads(messages)
+        parsed_messages = [ChatMessage(**m) for m in raw_msgs]
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid messages JSON")
+
+    if not parsed_messages:
+        raise HTTPException(status_code=400, detail="No messages provided")
+
+    last_msg = parsed_messages[-1]
+
+    # Fast path: image generation requests
+    if not file and _is_image_generation_request(last_msg.content):
+        # Return as a fast stream
+        def image_stream():
+            yield _build_image_response(last_msg.content)
+        return StreamingResponse(image_stream(), media_type="text/plain")
+
+    api_messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    model_to_use = get_model()
+
+    for msg in parsed_messages[:-1]:
+        api_messages.append({"role": msg.role, "content": msg.content})
+
+    if file and file.filename:
+        content_type = file.content_type or ""
+        file_content = await file.read()
+        
+        if len(file_content) > MAX_FILE_SIZE:
+            raise HTTPException(status_code=400, detail="File too large. Maximum size is 10MB.")
+
+        if content_type == "application/pdf" or file.filename.lower().endswith(".pdf"):
+            try:
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+                    temp_path = tmp.name
+                    tmp.write(file_content)
+
+                extracted = extract_text_with_pages(temp_path)
+                pdf_text = "\n".join([f"--- Page {p['page']} ---\n{p['text']}" for p in extracted])
+
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+
+                enhanced_prompt = f"{last_msg.content}\n\n[ATTACHED PDF DOCUMENT TEXT]:\n{pdf_text[:20000]}"
+                api_messages.append({"role": last_msg.role, "content": enhanced_prompt})
+
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Failed to process PDF: {str(e)}")
+
+        elif content_type.startswith("image/"):
+            try:
+                if len(file_content) < 100:
+                    raise HTTPException(status_code=400, detail="Image file is too small or corrupted.")
+
+                base64_image = base64.b64encode(file_content).decode("utf-8")
+                model_to_use = get_vision_model()
+                user_text = last_msg.content or "Describe this image in detail."
+                
+                api_messages.append({
+                    "role": last_msg.role,
+                    "content": [
+                        {"type": "text", "text": user_text},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:{content_type};base64,{base64_image}"
+                            }
+                        }
+                    ]
+                })
+            except HTTPException:
+                raise
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Failed to process image: {str(e)}")
+        else:
+            raise HTTPException(status_code=400, detail="Unsupported file type. Please upload a PDF or Image.")
+    else:
+        api_messages.append({"role": last_msg.role, "content": last_msg.content})
+
+    is_vision = model_to_use == get_vision_model()
+    max_tok = 1024 if not is_vision else 800
+
+    return StreamingResponse(
+        chat_completion_stream(
+            messages=api_messages,
+            model=model_to_use,
+            temperature=0.7,
+            max_tokens=max_tok,
+        ),
+        media_type="text/plain"
+    )
+

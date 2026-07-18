@@ -149,13 +149,26 @@ async def analyze_image(file: UploadFile = File(...)):
             cleaned = parts[1] if len(parts) > 1 else cleaned
             if cleaned.startswith("json"):
                 cleaned = cleaned[4:]
-        # Find JSON object
         start = cleaned.find("{")
         end = cleaned.rfind("}") + 1
         if start >= 0 and end > start:
             cleaned = cleaned[start:end]
 
-        data = json.loads(cleaned)
+        try:
+            data = json.loads(cleaned)
+        except json.JSONDecodeError:
+            # Fallback if model doesn't return JSON (e.g. if vision is unsupported and it just returns text)
+            raw_text = full_analysis.strip()
+            # clean think tags for the description fallback
+            raw_text = re.sub(r'<think>.*?</think>', '', raw_text, flags=re.DOTALL).strip()
+            data = {
+                "caption": "Image analysis limited.",
+                "objects": ["Various"],
+                "description": raw_text if raw_text else "The model could not generate a valid JSON description.",
+                "mood": "Neutral",
+                "colors": ["Unknown"]
+            }
+
         return VisionAnalysis(session_id=session_id, **data)
 
     except Exception as e:
